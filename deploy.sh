@@ -23,7 +23,7 @@ GCP_SERVICES=(
     "essentialcontacts.googleapis.com"
     "securitycenter.googleapis.com"
     "storage.googleapis.com"
-    "run.googleapis.com"
+    # "run.googleapis.com"
     "admin.googleapis.com"
     "cloudidentity.googleapis.com"
     "apikeys.googleapis.com"
