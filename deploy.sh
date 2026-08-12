@@ -243,8 +243,11 @@ echo "===================================================="
 echo " Creating Custom Organization Role..."
 echo "===================================================="
 
-ROLE_ID="csis_collector_role_$(openssl rand -hex 4 2>/dev/null || echo "$RANDOM$RANDOM")"
+# Use the project suffix for the role ID (deterministic)
+PROJECT_SUFFIX=$(echo "$PROJECT_ID" | sed 's/.*-//')
+ROLE_ID="csis_collector_role_$PROJECT_SUFFIX"
 
+# Check if a matching role already exists with this exact ID
 if gcloud iam roles describe "$ROLE_ID" --organization="$SELECTED_ORG_ID" &>/dev/null; then
     echo "-> Role '$ROLE_ID' already exists. Updating permissions..."
     gcloud iam roles update "$ROLE_ID" \
@@ -253,7 +256,9 @@ if gcloud iam roles describe "$ROLE_ID" --organization="$SELECTED_ORG_ID" &>/dev
         --title="CSIS Collector role" \
         --stage="GA" \
         --permissions="$ROLE_PERMISSIONS"
+    echo "-> Role '$ROLE_ID' updated."
 else
+    echo "-> No existing role found. Creating new role..."
     gcloud iam roles create "$ROLE_ID" \
         --quiet \
         --organization="$SELECTED_ORG_ID" \
@@ -268,6 +273,7 @@ echo ""
 echo "===================================================="
 echo " Binding Custom Role to Service Account..."
 echo "===================================================="
+
 gcloud organizations add-iam-policy-binding "$SELECTED_ORG_ID" \
     --member="serviceAccount:${SA_EMAIL}" \
     --role="organizations/${SELECTED_ORG_ID}/roles/${ROLE_ID}" \
