@@ -306,18 +306,12 @@ fi
 
 echo ""
 
-curl -X POST "https://csa.chronos.csis.com/$COLLECTOR_ID/Google/api/submit/" \
+curl -X POST "https://csa.cs-staging.csis.com/$COLLECTOR_ID/Google/api/submit/" \
   -H "Content-Type: application/json" \
   -d "{
-    \"collectorId\": \"$COLLECTOR_ID\",
     \"superAdminEmail\": \"$SUPER_ADMIN_EMAIL\",
     \"serviceAccountEmail\": \"$SA_EMAIL\"
   }"
 
 echo ""
-echo "Deployment complete!"
-
-echo "   - Service Account Email: $SA_EMAIL"
-echo "   - Workspace Super Admin: $SUPER_ADMIN_EMAIL"
-echo "   - Collector ID: $COLLECTOR_ID"
-
+echo "Deployment complete! You can now close this terminal."
