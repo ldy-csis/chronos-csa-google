@@ -76,10 +76,11 @@ if [ -z "$SUPER_ADMIN_EMAIL" ]; then
         echo "ERROR: Super Admin email cannot be empty."
         exit 1
     fi
+
+    echo "-> Super Admin email set to: '$SUPER_ADMIN_EMAIL'"
 else
     echo "Using SUPER_ADMIN_EMAIL from environment: '$SUPER_ADMIN_EMAIL'"
 fi
-echo "-> Super Admin email set to: '$SUPER_ADMIN_EMAIL'"
 
 if [ -z "$SELECTED_ORG_ID" ]; then
     # 3. Select Organization
