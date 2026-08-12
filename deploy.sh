@@ -40,17 +40,35 @@ gcloud auth application-default print-access-token &>/dev/null || {
     gcloud auth application-default login
 }
 
-# 1. Get Collector ID
+# 1. Get Collector ID from argument
 echo ""
 echo "===================================================="
 echo " Collector Configuration"
 echo "===================================================="
-read -p "Enter the Collector ID (e.g., '20XXXXXXXXXXXXXX'): " COLLECTOR_ID
-if [ -z "$COLLECTOR_ID" ]; then
-    echo "ERROR: Collector ID cannot be empty."
+if [ -z "$1" ]; then
+    echo "ERROR: Collector ID must be provided as an argument."
+    echo "Usage: bash deploy.sh <COLLECTOR_ID>"
+    echo "Example: bash deploy.sh 20XXXXXXXXXXXXXX"
     exit 1
 fi
+COLLECTOR_ID="$1"
 echo "-> Collector ID set to: '$COLLECTOR_ID'"
+export COLLECTOR_ID
+echo ""
+echo "===================================================="
+echo " Collector Configuration"
+echo "===================================================="
+if [ -z "$COLLECTOR_ID" ]; then
+    read -p "Enter the Collector ID (e.g., '20XXXXXXXXXXXXXX'): " COLLECTOR_ID
+    if [ -z "$COLLECTOR_ID" ]; then
+        echo "ERROR: Collector ID cannot be empty."
+        exit 1
+    fi
+else
+    echo "Using COLLECTOR_ID from environment: '$COLLECTOR_ID'"
+fi
+echo "-> Collector ID set to: '$COLLECTOR_ID'"
+export COLLECTOR_ID
 
 # 2. Get Super Admin Email
 echo ""
@@ -59,12 +77,17 @@ echo " Google Workspace Super Admin"
 echo "===================================================="
 echo "A list of admins can be found in the Google Admin Console under 'Directory' -> 'Users' -> 'Admin roles'."
 echo "https://admin.google.com/ac/roles/75874321289921097/admins?journey=45"
-read -p "Enter the Google Workspace Super Admin email address: " SUPER_ADMIN_EMAIL
 if [ -z "$SUPER_ADMIN_EMAIL" ]; then
-    echo "ERROR: Super Admin email cannot be empty."
-    exit 1
+    read -p "Enter the Google Workspace Super Admin email address: " SUPER_ADMIN_EMAIL
+    if [ -z "$SUPER_ADMIN_EMAIL" ]; then
+        echo "ERROR: Super Admin email cannot be empty."
+        exit 1
+    fi
+else
+    echo "Using SUPER_ADMIN_EMAIL from environment: '$SUPER_ADMIN_EMAIL'"
 fi
 echo "-> Super Admin email set to: '$SUPER_ADMIN_EMAIL'"
+export SUPER_ADMIN_EMAIL
 
 # 3. Select Organization
 echo ""

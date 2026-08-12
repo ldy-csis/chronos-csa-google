@@ -2,6 +2,6 @@
 
   Chronos CSA Google Cloud Assessment Tool
     
-  Run "bash deploy.sh" to get started.
+  Run "bash deploy.sh <COLLECTOR_ID>" to get started.
 
 ===================================================
