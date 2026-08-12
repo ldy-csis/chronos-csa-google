@@ -13,6 +13,7 @@ POOL_ID="csis-identity-pool"
 PROVIDER_ID="csis-cert-provider"
 TRUST_ANCHOR_FILE="trust_anchor.pem"
 TRUST_STORE_CONFIG_FILE=".trust_store_config.generated.yaml"
+DEPLOY_CONFIG_FILE=".deploy_config"
 
 GCP_SERVICES=(
     "cloudresourcemanager.googleapis.com"
@@ -31,6 +32,12 @@ GCP_SERVICES=(
 
 ROLE_PERMISSIONS="essentialcontacts.contacts.list,iam.accesspolicies.list,iam.policybindings.list,iam.roles.list,iam.serviceAccountKeys.list,iam.serviceAccounts.list,logging.logEntries.list,logging.logs.list,resourcemanager.projects.get,serviceusage.services.list,storage.buckets.list,storage.hmacKeys.list"
 
+# Load saved configuration if it exists
+if [ -f "$DEPLOY_CONFIG_FILE" ]; then
+    echo "Loading configuration from $DEPLOY_CONFIG_FILE..."
+    source "$DEPLOY_CONFIG_FILE"
+fi
+
 echo "===================================================="
 echo " Checking GCP Authentication..."
 echo "===================================================="
@@ -40,35 +47,21 @@ gcloud auth application-default print-access-token &>/dev/null || {
     gcloud auth application-default login
 }
 
-# 1. Get Collector ID from argument
-echo ""
-echo "===================================================="
-echo " Collector Configuration"
-echo "===================================================="
-if [ -z "$1" ]; then
-    echo "ERROR: Collector ID must be provided as an argument."
-    echo "Usage: bash deploy.sh <COLLECTOR_ID>"
-    echo "Example: bash deploy.sh 20XXXXXXXXXXXXXX"
-    exit 1
-fi
-COLLECTOR_ID="$1"
-echo "-> Collector ID set to: '$COLLECTOR_ID'"
-export COLLECTOR_ID
+# 1. Get Collector ID from argument or environment
 echo ""
 echo "===================================================="
 echo " Collector Configuration"
 echo "===================================================="
 if [ -z "$COLLECTOR_ID" ]; then
-    read -p "Enter the Collector ID (e.g., '20XXXXXXXXXXXXXX'): " COLLECTOR_ID
-    if [ -z "$COLLECTOR_ID" ]; then
-        echo "ERROR: Collector ID cannot be empty."
+    if [ -z "$1" ]; then
+        echo "ERROR: Collector ID must be provided as an argument or loaded from config."
+        echo "Usage: bash deploy.sh <COLLECTOR_ID>"
+        echo "Example: bash deploy.sh 20XXXXXXXXXXXXXX"
         exit 1
     fi
-else
-    echo "Using COLLECTOR_ID from environment: '$COLLECTOR_ID'"
+    COLLECTOR_ID="$1"
 fi
 echo "-> Collector ID set to: '$COLLECTOR_ID'"
-export COLLECTOR_ID
 
 # 2. Get Super Admin Email
 echo ""
@@ -87,41 +80,52 @@ else
     echo "Using SUPER_ADMIN_EMAIL from environment: '$SUPER_ADMIN_EMAIL'"
 fi
 echo "-> Super Admin email set to: '$SUPER_ADMIN_EMAIL'"
-export SUPER_ADMIN_EMAIL
 
-# 3. Select Organization
-echo ""
-echo "===================================================="
-echo " Fetching available Organizations..."
-echo "===================================================="
-
-# Fetch orgs and parse into arrays
-orgs=()
-org_ids=()
-while read -r name id; do
-    if [[ -n "$name" && -n "$id" ]]; then
-        orgs+=("$name")
-        org_ids+=("$id")
+if [ -z "$SELECTED_ORG_ID" ]; then
+    # 3. Select Organization
+    echo ""
+    echo "===================================================="
+    echo " Fetching available Organizations..."
+    echo "===================================================="
+    
+    # Fetch orgs and parse into arrays
+    orgs=()
+    org_ids=()
+    while read -r name id; do
+        if [[ -n "$name" && -n "$id" ]]; then
+            orgs+=("$name")
+            org_ids+=("$id")
+        fi
+    done < <(gcloud organizations list --format="value(displayName,ID)")
+    
+    if [ ${#orgs[@]} -eq 0 ]; then
+        echo "ERROR: No organizations found. Ensure you have 'roles/resourcemanager.organizationViewer' permissions."
+        exit 1
     fi
-done < <(gcloud organizations list --format="value(displayName,ID)")
+    
+    echo "Please select the organization to audit:"
+    select opt in "${orgs[@]}"; do
+        for i in "${!orgs[@]}"; do
+            if [[ "${orgs[$i]}" == "$opt" ]]; then
+                SELECTED_ORG_ID="${org_ids[$i]}"
+                break 2
+            fi
+        done
+        echo "Invalid selection. Please try again."
+    done
 
-if [ ${#orgs[@]} -eq 0 ]; then
-    echo "ERROR: No organizations found. Ensure you have 'roles/resourcemanager.organizationViewer' permissions."
-    exit 1
+    echo "-> Selected Organization: $opt ($SELECTED_ORG_ID)"
+else
+    echo "Using SELECTED_ORG_ID from environment: '$SELECTED_ORG_ID'"
 fi
 
-echo "Please select the organization to audit:"
-select opt in "${orgs[@]}"; do
-    for i in "${!orgs[@]}"; do
-        if [[ "${orgs[$i]}" == "$opt" ]]; then
-            SELECTED_ORG_ID="${org_ids[$i]}"
-            break 2
-        fi
-    done
-    echo "Invalid selection. Please try again."
-done
-
-echo "-> Selected Organization: $opt ($SELECTED_ORG_ID)"
+# Save configuration for resuming
+cat > "$DEPLOY_CONFIG_FILE" << EOF
+export COLLECTOR_ID="$COLLECTOR_ID"
+export SUPER_ADMIN_EMAIL="$SUPER_ADMIN_EMAIL"
+export SELECTED_ORG_ID="$SELECTED_ORG_ID"
+EOF
+echo "Configuration saved to $DEPLOY_CONFIG_FILE for resuming deployments"
 
 # 4. Check if project already exists, otherwise create it
 echo ""
