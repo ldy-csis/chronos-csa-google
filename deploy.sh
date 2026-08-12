@@ -40,7 +40,33 @@ gcloud auth application-default print-access-token &>/dev/null || {
     gcloud auth application-default login
 }
 
-# 1. Select Organization
+# 1. Get Collector ID
+echo ""
+echo "===================================================="
+echo " Collector Configuration"
+echo "===================================================="
+read -p "Enter the Collector ID (e.g., '20XXXXXXXXXXXXXX'): " COLLECTOR_ID
+if [ -z "$COLLECTOR_ID" ]; then
+    echo "ERROR: Collector ID cannot be empty."
+    exit 1
+fi
+echo "-> Collector ID set to: '$COLLECTOR_ID'"
+
+# 2. Get Super Admin Email
+echo ""
+echo "===================================================="
+echo " Google Workspace Super Admin"
+echo "===================================================="
+echo "A list of admins can be found in the Google Admin Console under 'Directory' -> 'Users' -> 'Admin roles'."
+echo "https://admin.google.com/ac/roles/75874321289921097/admins?journey=45"
+read -p "Enter the Google Workspace Super Admin email address: " SUPER_ADMIN_EMAIL
+if [ -z "$SUPER_ADMIN_EMAIL" ]; then
+    echo "ERROR: Super Admin email cannot be empty."
+    exit 1
+fi
+echo "-> Super Admin email set to: '$SUPER_ADMIN_EMAIL'"
+
+# 3. Select Organization
 echo ""
 echo "===================================================="
 echo " Fetching available Organizations..."
@@ -74,7 +100,7 @@ done
 
 echo "-> Selected Organization: $opt ($SELECTED_ORG_ID)"
 
-# 2. Check if project already exists, otherwise create it
+# 4. Check if project already exists, otherwise create it
 echo ""
 echo "===================================================="
 echo " Checking for existing '$PROJECT_NAME' project..."
@@ -97,7 +123,7 @@ fi
 
 PROJECT_NUM=$(gcloud projects describe "$PROJECT_ID" --format="value(projectNumber)")
 
-# 3. Enable required APIs
+# 5. Enable required APIs
 echo ""
 echo "===================================================="
 echo " Enabling required APIs on '$PROJECT_ID'..."
@@ -105,7 +131,7 @@ echo "===================================================="
 gcloud services enable "${GCP_SERVICES[@]}" --project="$PROJECT_ID"
 echo "-> APIs enabled."
 
-# 4. Create the Service Account
+# 6. Create the Service Account
 echo ""
 echo "===================================================="
 echo " Creating Service Account..."
@@ -121,7 +147,7 @@ else
     echo "-> Service account '$SA_EMAIL' created."
 fi
 
-# 5. Create the Workload Identity Pool
+# 7. Create the Workload Identity Pool
 echo ""
 echo "===================================================="
 echo " Creating Workload Identity Pool..."
@@ -137,7 +163,7 @@ else
     echo "-> Workload identity pool '$POOL_ID' created."
 fi
 
-# 6. Create the Workload Identity Pool Provider (X.509)
+# 8. Create the Workload Identity Pool Provider (X.509)
 echo ""
 echo "===================================================="
 echo " Creating Workload Identity Pool Provider..."
@@ -180,40 +206,37 @@ echo "===================================================="
 gcloud iam service-accounts add-iam-policy-binding "$SA_EMAIL" \
     --project="$PROJECT_ID" \
     --role="roles/iam.workloadIdentityUser" \
-    --member="principalSet://iam.googleapis.com/projects/${PROJECT_NUM}/locations/global/workloadIdentityPools/${POOL_ID}/attribute.subject/CSIS Collector" \
+    --member="principalSet://iam.googleapis.com/projects/${PROJECT_NUM}/locations/global/workloadIdentityPools/${POOL_ID}/attribute.subject/$COLLECTOR_ID" \
     >/dev/null
 echo "-> Binding applied."
 
-# 7. Create the Custom Role [Organization Level]
+# 9. Create the Custom Role [Organization Level]
 echo ""
 echo "===================================================="
 echo " Creating Custom Organization Role..."
 echo "===================================================="
 
-# Role IDs are derived deterministically from the project ID so re-running
-# this script against the same project reuses the same role instead of
-# creating duplicates.
-ROLE_ID="csis_collector_role_$(echo "$PROJECT_ID" | tr -c 'a-zA-Z0-9' '_')"
+ROLE_ID="csis_collector_role_$(openssl rand -hex 4 2>/dev/null || echo "$RANDOM$RANDOM")"
 
 if gcloud iam roles describe "$ROLE_ID" --organization="$SELECTED_ORG_ID" &>/dev/null; then
     echo "-> Role '$ROLE_ID' already exists. Updating permissions..."
     gcloud iam roles update "$ROLE_ID" \
+        --quiet \
         --organization="$SELECTED_ORG_ID" \
         --title="CSIS Collector role" \
         --stage="GA" \
-        --permissions="$ROLE_PERMISSIONS" \
-        >/dev/null
+        --permissions="$ROLE_PERMISSIONS"
 else
     gcloud iam roles create "$ROLE_ID" \
+        --quiet \
         --organization="$SELECTED_ORG_ID" \
         --title="CSIS Collector role" \
         --stage="GA" \
-        --permissions="$ROLE_PERMISSIONS" \
-        >/dev/null
+        --permissions="$ROLE_PERMISSIONS"
     echo "-> Role '$ROLE_ID' created."
 fi
 
-# 8. Create the Role Binding [Organization Level]
+# 10. Create the Role Binding [Organization Level]
 echo ""
 echo "===================================================="
 echo " Binding Custom Role to Service Account..."
@@ -227,24 +250,40 @@ echo "-> Role bound to service account."
 # Fetch the OAuth 2 Client ID (unique_id of the service account)
 CLIENT_ID=$(gcloud iam service-accounts describe "$SA_EMAIL" --project="$PROJECT_ID" --format="value(uniqueId)")
 
-echo ""
-echo "Deployment complete! Please save the following details:"
-echo "----------------------------------------------------"
-echo "Project ID:             $PROJECT_ID"
-echo "Project Number:         $PROJECT_NUM"
-echo "Service Account Email:  $SA_EMAIL"
-echo "OAuth 2 Client ID:      $CLIENT_ID"
-echo "----------------------------------------------------"
-echo ""
 echo "===================================================="
 echo " Action Required: Google Workspaces Delegation"
 echo "===================================================="
-echo "To complete the setup, please perform the manual step (3.7):"
-echo "1. Go to your Google Workspace Domain-Wide Delegation page."
+echo "To complete the setup, please perform the manual step:"
+echo "1. Go to your Google Workspace Domain-Wide Delegation page: https://admin.google.com/ac/owl/domainwidedelegation"
 echo "2. Add a new client with:"
 echo "   - Client ID: $CLIENT_ID"
 echo "   - OAuth Scopes:"
 echo "     https://www.googleapis.com/auth/cloud-platform,https://www.googleapis.com/auth/admin.directory.group.readonly,https://www.googleapis.com/auth/admin.directory.domain.readonly,https://www.googleapis.com/auth/admin.reports.audit.readonly,https://www.googleapis.com/auth/admin.directory.user.security,https://www.googleapis.com/auth/cloud-identity.policies.readonly,https://www.googleapis.com/auth/admin.directory.rolemanagement.readonly"
 echo ""
-echo "3. Once done, provide this Client ID ($CLIENT_ID) and your Workspace Super Admin email to the CSIS Cloud Security Assessment page to start the analysis."
+echo "===================================================="
+echo ""
+
+read -p "Have you completed the Domain-Wide Delegation setup? Type 'yes' to confirm: " DWD_CONFIRM
+
+if [[ "$DWD_CONFIRM" != "yes" ]]; then
+    echo "ERROR: Domain-Wide Delegation setup must be completed before proceeding."
+    exit 1
+fi
+
+echo ""
+
+curl -X POST "https://csa.chronos.csis.com/$COLLECTOR_ID/Google/api/submit/" \
+  -H "Content-Type: application/json" \
+  -d "{
+    \"collectorId\": \"$COLLECTOR_ID\",
+    \"superAdminEmail\": \"$SUPER_ADMIN_EMAIL\",
+    \"serviceAccountEmail\": \"$SA_EMAIL\"
+  }"
+
+echo ""
+echo "Deployment complete!"
+
+echo "   - Service Account Email: $SA_EMAIL"
+echo "   - Workspace Super Admin: $SUPER_ADMIN_EMAIL"
+echo "   - Collector ID: $COLLECTOR_ID"
 
