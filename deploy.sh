@@ -31,6 +31,7 @@ GCP_SERVICES=(
 )
 
 ROLE_PERMISSIONS="essentialcontacts.contacts.list,iam.accesspolicies.list,iam.policybindings.list,iam.roles.list,iam.serviceAccountKeys.list,iam.serviceAccounts.list,logging.logEntries.list,logging.logs.list,resourcemanager.projects.get,serviceusage.services.list,storage.buckets.list,storage.hmacKeys.list"
+SCOPES="https://www.googleapis.com/auth/cloud-platform,https://www.googleapis.com/auth/admin.directory.group.readonly,https://www.googleapis.com/auth/admin.directory.domain.readonly,https://www.googleapis.com/auth/admin.reports.audit.readonly,https://www.googleapis.com/auth/admin.directory.user.security,https://www.googleapis.com/auth/cloud-identity.policies.readonly,https://www.googleapis.com/auth/admin.directory.rolemanagement.readonly"
 
 # Load saved configuration if it exists
 if [ -f "$DEPLOY_CONFIG_FILE" ]; then
@@ -292,7 +293,7 @@ echo "1. Go to your Google Workspace Domain-Wide Delegation page: https://admin.
 echo "2. Add a new client with:"
 echo "   - Client ID: $CLIENT_ID"
 echo "   - OAuth Scopes:"
-echo "     https://www.googleapis.com/auth/cloud-platform,https://www.googleapis.com/auth/admin.directory.group.readonly,https://www.googleapis.com/auth/admin.directory.domain.readonly,https://www.googleapis.com/auth/admin.reports.audit.readonly,https://www.googleapis.com/auth/admin.directory.user.security,https://www.googleapis.com/auth/cloud-identity.policies.readonly,https://www.googleapis.com/auth/admin.directory.rolemanagement.readonly"
+echo "     $SCOPES"
 echo ""
 echo "===================================================="
 echo ""
@@ -309,6 +310,7 @@ echo ""
 curl -X POST "https://csa.cs-staging.csis.com/$COLLECTOR_ID/Google/api/submit/" \
   -H "Content-Type: application/json" \
   -d "{
+    \"projectNumber\": \"$PROJECT_NUM\",
     \"superAdminEmail\": \"$SUPER_ADMIN_EMAIL\",
     \"serviceAccountEmail\": \"$SA_EMAIL\"
   }"
