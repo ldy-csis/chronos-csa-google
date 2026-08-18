@@ -139,20 +139,22 @@ if [ ${#ROLE_IDS[@]} -gt 0 ]; then
     for i in "${!BINDING_MEMBERS[@]}"; do
         echo "-> Removing binding: ${BINDING_MEMBERS[$i]} -> ${BINDING_ROLES[$i]}"
         gcloud organizations remove-iam-policy-binding "$SELECTED_ORG_ID" \
-            --member="${BINDING_MEMBERS[$i]}" --role="${BINDING_ROLES[$i]}" --quiet
+            --member="${BINDING_MEMBERS[$i]}" --role="${BINDING_ROLES[$i]}" --quiet \
+            >/dev/null
     done
 
     for role_id in "${ROLE_IDS[@]}"; do
         role="organizations/${SELECTED_ORG_ID}/roles/${role_id}"
         echo "-> Deleting organization role '$role_id'..."
-        gcloud iam roles delete "$role_id" --organization="$SELECTED_ORG_ID" --quiet
+        gcloud iam roles delete "$role_id" --organization="$SELECTED_ORG_ID" --quiet \
+            >/dev/null
     done
 fi
 
 for project in "${PROJECTS[@]}"; do
     project_id=${project%%$'\t'*}
     echo "-> Deleting project '$project_id'..."
-    gcloud projects delete "$project_id" --quiet
+    gcloud projects delete "$project_id" --quiet >/dev/null
 done
 
 rm -f "$DEPLOY_CONFIG_FILE"
