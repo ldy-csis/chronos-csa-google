@@ -25,51 +25,15 @@ wait_for() {
     return 1
 }
 
-has_organization_permissions() {
-    local permissions
-    permissions=$(gcloud organizations test-iam-permissions "$SELECTED_ORG_ID" \
-        --permissions="resourcemanager.projects.create,iam.roles.get,iam.roles.create,iam.roles.update,resourcemanager.organizations.getIamPolicy,resourcemanager.organizations.setIamPolicy" \
-        --format="value(permissions)" 2>/dev/null | tr ';' ',' || true)
-
-    local required_permission
-    for required_permission in \
-        resourcemanager.projects.create \
-        iam.roles.get \
-        iam.roles.create \
-        iam.roles.update \
-        resourcemanager.organizations.getIamPolicy \
-        resourcemanager.organizations.setIamPolicy; do
-        if [[ ",$permissions," != *",$required_permission,"* ]]; then
-            echo "ERROR: Missing required organization permission: $required_permission"
-            return 1
-        fi
-    done
+check_organization_access() {
+    gcloud organizations describe "$SELECTED_ORG_ID" >/dev/null
+    gcloud organizations get-iam-policy "$SELECTED_ORG_ID" >/dev/null
+    gcloud iam roles list --organization="$SELECTED_ORG_ID" --limit=1 >/dev/null
 }
 
-has_project_permissions() {
-    local permissions
-    permissions=$(gcloud projects test-iam-permissions "$PROJECT_ID" \
-        --permissions="resourcemanager.projects.get,serviceusage.services.enable,serviceusage.services.list,iam.serviceAccounts.get,iam.serviceAccounts.create,iam.workloadIdentityPools.get,iam.workloadIdentityPools.create,iam.workloadIdentityPoolProviders.get,iam.workloadIdentityPoolProviders.create,iam.serviceAccounts.getIamPolicy,iam.serviceAccounts.setIamPolicy" \
-        --format="value(permissions)" 2>/dev/null | tr ';' ',' || true)
-
-    local required_permission
-    for required_permission in \
-        resourcemanager.projects.get \
-        serviceusage.services.enable \
-        serviceusage.services.list \
-        iam.serviceAccounts.get \
-        iam.serviceAccounts.create \
-        iam.workloadIdentityPools.get \
-        iam.workloadIdentityPools.create \
-        iam.workloadIdentityPoolProviders.get \
-        iam.workloadIdentityPoolProviders.create \
-        iam.serviceAccounts.getIamPolicy \
-        iam.serviceAccounts.setIamPolicy; do
-        if [[ ",$permissions," != *",$required_permission,"* ]]; then
-            echo "ERROR: Missing required project permission: $required_permission"
-            return 1
-        fi
-    done
+check_project_access() {
+    gcloud projects describe "$PROJECT_ID" >/dev/null
+    gcloud services list --enabled --project="$PROJECT_ID" --limit=1 >/dev/null
 }
 
 project_is_active() {
@@ -246,10 +210,11 @@ echo "-> Organization name: '$SELECTED_ORG_NAME'"
 # 4. Validate organization permissions before making any changes
 echo ""
 echo "===================================================="
-echo " Checking Organization Permissions..."
+echo " Checking Organization Access..."
 echo "===================================================="
-has_organization_permissions
-echo "-> Required organization permissions are available."
+check_organization_access
+echo "-> Organization can be read and its IAM policy and custom roles can be listed."
+echo "-> The gcloud CLI cannot preflight individual create/update IAM permissions; commands will fail before dependent steps if access is missing."
 
 # Require explicit confirmation before the first mutation.
 echo ""
@@ -305,10 +270,10 @@ PROJECT_NUM=$(gcloud projects describe "$PROJECT_ID" --format="value(projectNumb
 # Project-scoped permissions cannot be evaluated until the project exists.
 echo ""
 echo "===================================================="
-echo " Checking Project Permissions..."
+echo " Checking Project Access..."
 echo "===================================================="
-wait_for "project IAM permissions to propagate" 12 5 has_project_permissions
-echo "-> Required project permissions are available."
+wait_for "project access to propagate" 12 5 check_project_access
+echo "-> Project can be read and its enabled services can be listed."
 
 # 6. Enable required APIs
 echo ""

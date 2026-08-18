@@ -40,9 +40,9 @@ This tool automates the deployment of infrastructure necessary to run the Chrono
 
 ## Deployment Safeguards
 
-Before making changes, the script verifies the active `gcloud` account has the required organization-level permissions and displays a summary of the resources it will create or update. You must type `yes` to continue; any other response exits without creating resources or saving deployment configuration.
+Before making changes, the script uses only the `gcloud` CLI to verify the active account can read the organization, its IAM policy, and custom roles, then displays a summary of the resources it will create or update. You must type `yes` to continue; any other response exits without creating resources or saving deployment configuration.
 
-After the project is available, the script verifies its project-level permissions before enabling APIs or creating project resources. It also waits for the project, enabled APIs, service account, and workload identity resources to be ready before using them. IAM permission propagation can still take a short time, so these checks use bounded retries and report a clear timeout if Google Cloud does not make a resource available in time.
+After the project is available, the script verifies it can be read and its enabled services listed before proceeding. The `gcloud` CLI does not provide an organization/project `testIamPermissions` command, so it cannot preflight individual create or update permissions. Those commands fail before dependent steps if access is missing. The script waits for the project, enabled APIs, service account, and workload identity resources to be ready before using them. IAM permission propagation can still take a short time, so these checks use bounded retries and report a clear timeout if Google Cloud does not make a resource available in time.
 
 ## What Gets Created
 
