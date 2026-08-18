@@ -236,6 +236,13 @@ else
     echo "Using SELECTED_ORG_ID from environment: '$SELECTED_ORG_ID'"
 fi
 
+SELECTED_ORG_NAME=$(gcloud organizations describe "$SELECTED_ORG_ID" --format="value(displayName)")
+if [ -z "$SELECTED_ORG_NAME" ]; then
+    echo "ERROR: Could not determine the display name for organization '$SELECTED_ORG_ID'."
+    exit 1
+fi
+echo "-> Organization name: '$SELECTED_ORG_NAME'"
+
 # 4. Validate organization permissions before making any changes
 echo ""
 echo "===================================================="
@@ -250,7 +257,7 @@ echo "===================================================="
 echo " Deployment Summary"
 echo "===================================================="
 echo "Deployer:             $DEPLOYER_ACCOUNT"
-echo "Organization:         $SELECTED_ORG_ID"
+echo "Organization:         $SELECTED_ORG_NAME ($SELECTED_ORG_ID)"
 echo "Project name:         $PROJECT_NAME"
 echo "Service account:      ${SA_ACCOUNT_ID}@<new-project>.iam.gserviceaccount.com"
 echo "Workload identity:    $POOL_ID / $PROVIDER_ID"
@@ -464,9 +471,10 @@ echo ""
 
 curl -X POST "https://csa.cs-staging.csis.com/$COLLECTOR_ID/Google/api/submit/" \
   -H "Content-Type: application/json" \
-  -d "{
-    \"projectNumber\": \"$PROJECT_NUM\",
-    \"superAdminEmail\": \"$SUPER_ADMIN_EMAIL\",
+   -d "{
+     \"projectNumber\": \"$PROJECT_NUM\",
+     \"OrgName\": \"$SELECTED_ORG_NAME\",
+     \"superAdminEmail\": \"$SUPER_ADMIN_EMAIL\",
     \"serviceAccountEmail\": \"$SA_EMAIL\"
   }"
 
