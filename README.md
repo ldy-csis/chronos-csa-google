@@ -60,7 +60,13 @@ After the project is available, the script verifies it can be read and its enabl
 
 ## Cleanup
 
-Simply delete the `CSIS-CSA-Resources` project in the Google Cloud Console. No Terraform state files or manual cleanup needed.
+Run the cleanup script to find and remove Chronos CSA resources in the selected organization:
+
+```bash
+bash cleanup.sh
+```
+
+The script discovers only projects with IDs beginning `csis-csa-resources-` and organization custom roles beginning `csis_collector_role_` in the selected organization. It lists all matching resources and requires you to type `yes` before removing role bindings, deleting the roles, and deleting the projects. Google Cloud schedules deleted projects for deletion and may allow recovery only during its retention period.
 
 ## Security Notes
 
