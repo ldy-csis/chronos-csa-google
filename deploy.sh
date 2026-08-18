@@ -3,6 +3,99 @@
 # Exit immediately if a command exits with a non-zero status
 set -e
 
+wait_for() {
+    local description="$1"
+    local attempts="$2"
+    local delay="$3"
+    shift 3
+
+    for ((attempt = 1; attempt <= attempts; attempt++)); do
+        if "$@"; then
+            echo "-> $description is ready."
+            return 0
+        fi
+
+        if [ "$attempt" -lt "$attempts" ]; then
+            echo "-> Waiting for $description ($attempt/$attempts)..."
+            sleep "$delay"
+        fi
+    done
+
+    echo "ERROR: Timed out waiting for $description."
+    return 1
+}
+
+has_organization_permissions() {
+    local permissions
+    permissions=$(gcloud organizations test-iam-permissions "$SELECTED_ORG_ID" \
+        --permissions="resourcemanager.projects.create,iam.roles.get,iam.roles.create,iam.roles.update,resourcemanager.organizations.getIamPolicy,resourcemanager.organizations.setIamPolicy" \
+        --format="value(permissions)" 2>/dev/null | tr ';' ',' || true)
+
+    local required_permission
+    for required_permission in \
+        resourcemanager.projects.create \
+        iam.roles.get \
+        iam.roles.create \
+        iam.roles.update \
+        resourcemanager.organizations.getIamPolicy \
+        resourcemanager.organizations.setIamPolicy; do
+        if [[ ",$permissions," != *",$required_permission,"* ]]; then
+            echo "ERROR: Missing required organization permission: $required_permission"
+            return 1
+        fi
+    done
+}
+
+has_project_permissions() {
+    local permissions
+    permissions=$(gcloud projects test-iam-permissions "$PROJECT_ID" \
+        --permissions="resourcemanager.projects.get,serviceusage.services.enable,serviceusage.services.list,iam.serviceAccounts.get,iam.serviceAccounts.create,iam.workloadIdentityPools.get,iam.workloadIdentityPools.create,iam.workloadIdentityPoolProviders.get,iam.workloadIdentityPoolProviders.create,iam.serviceAccounts.getIamPolicy,iam.serviceAccounts.setIamPolicy" \
+        --format="value(permissions)" 2>/dev/null | tr ';' ',' || true)
+
+    local required_permission
+    for required_permission in \
+        resourcemanager.projects.get \
+        serviceusage.services.enable \
+        serviceusage.services.list \
+        iam.serviceAccounts.get \
+        iam.serviceAccounts.create \
+        iam.workloadIdentityPools.get \
+        iam.workloadIdentityPools.create \
+        iam.workloadIdentityPoolProviders.get \
+        iam.workloadIdentityPoolProviders.create \
+        iam.serviceAccounts.getIamPolicy \
+        iam.serviceAccounts.setIamPolicy; do
+        if [[ ",$permissions," != *",$required_permission,"* ]]; then
+            echo "ERROR: Missing required project permission: $required_permission"
+            return 1
+        fi
+    done
+}
+
+project_is_active() {
+    [ "$(gcloud projects describe "$PROJECT_ID" --format="value(lifecycleState)" 2>/dev/null)" = "ACTIVE" ]
+}
+
+api_is_enabled() {
+    gcloud services list --enabled --project="$PROJECT_ID" \
+        --filter="config.name=$1" --format="value(config.name)" 2>/dev/null | grep -qx "$1"
+}
+
+service_account_exists() {
+    gcloud iam service-accounts describe "$SA_EMAIL" --project="$PROJECT_ID" >/dev/null 2>&1
+}
+
+workload_identity_pool_exists() {
+    gcloud iam workload-identity-pools describe "$POOL_ID" \
+        --project="$PROJECT_ID" --location="global" >/dev/null 2>&1
+}
+
+workload_identity_provider_exists() {
+    gcloud iam workload-identity-pools providers describe "$PROVIDER_ID" \
+        --project="$PROJECT_ID" --location="global" \
+        --workload-identity-pool="$POOL_ID" >/dev/null 2>&1
+}
+
 # Because everything is created inside a single dedicated project
 # ("CSIS-CSA-Resources"), the whole deployment can be torn down at any time
 # simply by deleting that project.
@@ -42,11 +135,33 @@ fi
 echo "===================================================="
 echo " Checking GCP Authentication..."
 echo "===================================================="
+for command in gcloud curl; do
+    if ! command -v "$command" >/dev/null 2>&1; then
+        echo "ERROR: Required command '$command' is not installed or is not on PATH."
+        exit 1
+    fi
+done
+
+if [ ! -f "$TRUST_ANCHOR_FILE" ]; then
+    echo "ERROR: '$TRUST_ANCHOR_FILE' not found. It is required to configure the X.509 provider."
+    exit 1
+fi
+
 # Ensure the user is authenticated
 gcloud auth application-default print-access-token &>/dev/null || {
     echo "You are not authenticated. Running 'gcloud auth application-default login'..."
     gcloud auth application-default login
 }
+gcloud auth print-access-token &>/dev/null || {
+    echo "You are not authenticated for gcloud commands. Running 'gcloud auth login'..."
+    gcloud auth login
+}
+DEPLOYER_ACCOUNT=$(gcloud config get-value account 2>/dev/null)
+if [ -z "$DEPLOYER_ACCOUNT" ] || [ "$DEPLOYER_ACCOUNT" = "(unset)" ]; then
+    echo "ERROR: No active gcloud account is configured. Run 'gcloud auth login' and try again."
+    exit 1
+fi
+echo "-> Deploying as: '$DEPLOYER_ACCOUNT'"
 
 # 1. Get Collector ID from argument or environment
 echo ""
@@ -121,7 +236,33 @@ else
     echo "Using SELECTED_ORG_ID from environment: '$SELECTED_ORG_ID'"
 fi
 
-# Save configuration for resuming
+# 4. Validate organization permissions before making any changes
+echo ""
+echo "===================================================="
+echo " Checking Organization Permissions..."
+echo "===================================================="
+has_organization_permissions
+echo "-> Required organization permissions are available."
+
+# Require explicit confirmation before the first mutation.
+echo ""
+echo "===================================================="
+echo " Deployment Summary"
+echo "===================================================="
+echo "Deployer:             $DEPLOYER_ACCOUNT"
+echo "Organization:         $SELECTED_ORG_ID"
+echo "Project name:         $PROJECT_NAME"
+echo "Service account:      ${SA_ACCOUNT_ID}@<new-project>.iam.gserviceaccount.com"
+echo "Workload identity:    $POOL_ID / $PROVIDER_ID"
+echo "Custom role:          Organization-level CSIS Collector role"
+echo ""
+read -r -p "Type 'yes' to create or update these resources: " DEPLOY_CONFIRM
+if [[ "$DEPLOY_CONFIRM" != "yes" ]]; then
+    echo "Deployment cancelled. No resources were created or changed."
+    exit 0
+fi
+
+# Save configuration only after deployment has been explicitly approved.
 cat > "$DEPLOY_CONFIG_FILE" << EOF
 export COLLECTOR_ID="$COLLECTOR_ID"
 export SUPER_ADMIN_EMAIL="$SUPER_ADMIN_EMAIL"
@@ -129,7 +270,7 @@ export SELECTED_ORG_ID="$SELECTED_ORG_ID"
 EOF
 echo "Configuration saved to $DEPLOY_CONFIG_FILE for resuming deployments"
 
-# 4. Check if project already exists, otherwise create it
+# 5. Check if project already exists, otherwise create it
 echo ""
 echo "===================================================="
 echo " Checking for existing '$PROJECT_NAME' project..."
@@ -150,17 +291,30 @@ else
     echo "-> Project '$PROJECT_ID' created."
 fi
 
+wait_for "project '$PROJECT_ID' to become active" 30 5 \
+    project_is_active
 PROJECT_NUM=$(gcloud projects describe "$PROJECT_ID" --format="value(projectNumber)")
 
-# 5. Enable required APIs
+# Project-scoped permissions cannot be evaluated until the project exists.
+echo ""
+echo "===================================================="
+echo " Checking Project Permissions..."
+echo "===================================================="
+wait_for "project IAM permissions to propagate" 12 5 has_project_permissions
+echo "-> Required project permissions are available."
+
+# 6. Enable required APIs
 echo ""
 echo "===================================================="
 echo " Enabling required APIs on '$PROJECT_ID'..."
 echo "===================================================="
 gcloud services enable "${GCP_SERVICES[@]}" --project="$PROJECT_ID"
+for service in "${GCP_SERVICES[@]}"; do
+    wait_for "API '$service'" 24 5 api_is_enabled "$service"
+done
 echo "-> APIs enabled."
 
-# 6. Create the Service Account
+# 7. Create the Service Account
 echo ""
 echo "===================================================="
 echo " Creating Service Account..."
@@ -175,8 +329,10 @@ else
         --display-name="$SA_ACCOUNT_ID"
     echo "-> Service account '$SA_EMAIL' created."
 fi
+wait_for "service account '$SA_EMAIL'" 12 5 \
+    service_account_exists
 
-# 7. Create the Workload Identity Pool
+# 8. Create the Workload Identity Pool
 echo ""
 echo "===================================================="
 echo " Creating Workload Identity Pool..."
@@ -191,17 +347,14 @@ else
         --display-name="$POOL_ID"
     echo "-> Workload identity pool '$POOL_ID' created."
 fi
+wait_for "workload identity pool '$POOL_ID'" 12 5 \
+    workload_identity_pool_exists
 
-# 8. Create the Workload Identity Pool Provider (X.509)
+# 9. Create the Workload Identity Pool Provider (X.509)
 echo ""
 echo "===================================================="
 echo " Creating Workload Identity Pool Provider..."
 echo "===================================================="
-
-if [ ! -f "$TRUST_ANCHOR_FILE" ]; then
-    echo "ERROR: '$TRUST_ANCHOR_FILE' not found. It is required to configure the X.509 provider."
-    exit 1
-fi
 
 # Build the trust store config YAML expected by --trust-store-config-path
 {
@@ -224,6 +377,8 @@ else
         --attribute-mapping="google.subject=assertion.subject.dn.cn"
     echo "-> Provider '$PROVIDER_ID' created."
 fi
+wait_for "workload identity provider '$PROVIDER_ID'" 12 5 \
+    workload_identity_provider_exists
 
 rm -f "$TRUST_STORE_CONFIG_FILE"
 
