@@ -54,6 +54,7 @@ After the project is available, the script verifies it can be read and its enabl
   - IAM policies and roles inspection
   - Cloud Logging access
   - Cloud Asset inventory
+  - Organization Policies, constraints, and custom constraints
   - Service usage monitoring
   - Storage bucket auditing
   - And more...

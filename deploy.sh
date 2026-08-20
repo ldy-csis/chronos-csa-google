@@ -85,9 +85,10 @@ GCP_SERVICES=(
     "admin.googleapis.com"
     "cloudidentity.googleapis.com"
     "apikeys.googleapis.com"
+    "orgpolicy.googleapis.com"
 )
 
-ROLE_PERMISSIONS="essentialcontacts.contacts.list,iam.accesspolicies.list,iam.policybindings.list,iam.roles.list,iam.serviceAccountKeys.list,iam.serviceAccounts.list,logging.logEntries.list,logging.logs.list,resourcemanager.projects.get,serviceusage.services.list,storage.buckets.list,storage.hmacKeys.list"
+ROLE_PERMISSIONS="essentialcontacts.contacts.list,iam.accesspolicies.list,iam.policybindings.list,iam.roles.list,iam.serviceAccountKeys.list,iam.serviceAccounts.list,logging.logEntries.list,logging.logs.list,orgpolicy.constraints.list,orgpolicy.customConstraints.list,orgpolicy.policies.list,resourcemanager.projects.get,serviceusage.services.list,storage.buckets.list,storage.hmacKeys.list"
 SCOPES="https://www.googleapis.com/auth/cloud-platform,https://www.googleapis.com/auth/admin.directory.group.readonly,https://www.googleapis.com/auth/admin.directory.domain.readonly,https://www.googleapis.com/auth/admin.reports.audit.readonly,https://www.googleapis.com/auth/admin.directory.user.security,https://www.googleapis.com/auth/cloud-identity.policies.readonly,https://www.googleapis.com/auth/admin.directory.rolemanagement.readonly"
 
 # Load saved configuration if it exists
@@ -425,23 +426,33 @@ echo ""
 echo "===================================================="
 echo ""
 
-read -p "Have you completed the Domain-Wide Delegation setup? Type 'yes' to confirm: " DWD_CONFIRM
+read -p "Have you completed the Domain-Wide Delegation setup? Type 'yes' or 'no': " DWD_CONFIRM
 
-if [[ "$DWD_CONFIRM" != "yes" ]]; then
-    echo "ERROR: Domain-Wide Delegation setup must be completed before proceeding."
+if [[ "$DWD_CONFIRM" != "yes" && "$DWD_CONFIRM" != "no" ]]; then
+    echo "ERROR: Please enter 'yes' or 'no'."
     exit 1
 fi
 
 echo ""
 
+if [[ "$DWD_CONFIRM" == "yes" ]]; then
+    PAYLOAD="{
+      \"projectNumber\": \"$PROJECT_NUM\",
+      \"OrgName\": \"$SELECTED_ORG_NAME\",
+      \"superAdminEmail\": \"$SUPER_ADMIN_EMAIL\",
+      \"serviceAccountEmail\": \"$SA_EMAIL\"
+    }"
+else
+    PAYLOAD="{
+      \"projectNumber\": \"$PROJECT_NUM\",
+      \"OrgName\": \"$SELECTED_ORG_NAME\",
+      \"serviceAccountEmail\": \"$SA_EMAIL\"
+    }"
+fi
+
 curl -X POST "https://csa.cs-staging.csis.com/$COLLECTOR_ID/Google/api/submit/" \
   -H "Content-Type: application/json" \
-   -d "{
-     \"projectNumber\": \"$PROJECT_NUM\",
-     \"OrgName\": \"$SELECTED_ORG_NAME\",
-     \"superAdminEmail\": \"$SUPER_ADMIN_EMAIL\",
-    \"serviceAccountEmail\": \"$SA_EMAIL\"
-  }"
+  -d "$PAYLOAD"
 
 echo ""
 echo "Deployment complete! You can now close this terminal."
