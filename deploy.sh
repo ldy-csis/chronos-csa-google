@@ -81,15 +81,15 @@ GCP_SERVICES=(
     "essentialcontacts.googleapis.com"
     "securitycenter.googleapis.com"
     "storage.googleapis.com"
-    # "run.googleapis.com"
+    "run.googleapis.com"
     "admin.googleapis.com"
     "cloudidentity.googleapis.com"
     "apikeys.googleapis.com"
     "orgpolicy.googleapis.com"
 )
 
-ROLE_PERMISSIONS="essentialcontacts.contacts.list,iam.accesspolicies.list,iam.policybindings.list,iam.roles.list,iam.serviceAccountKeys.list,iam.serviceAccounts.list,logging.logEntries.list,logging.logs.list,orgpolicy.constraints.list,orgpolicy.customConstraints.list,orgpolicy.policies.list,resourcemanager.projects.get,serviceusage.services.list,storage.buckets.list,storage.hmacKeys.list"
-SCOPES="https://www.googleapis.com/auth/cloud-platform,https://www.googleapis.com/auth/admin.directory.group.readonly,https://www.googleapis.com/auth/admin.directory.domain.readonly,https://www.googleapis.com/auth/admin.reports.audit.readonly,https://www.googleapis.com/auth/admin.directory.user.security,https://www.googleapis.com/auth/cloud-identity.policies.readonly,https://www.googleapis.com/auth/admin.directory.rolemanagement.readonly"
+ROLE_PERMISSIONS="apikeys.keys.list,cloudasset.assets.searchAllIamPolicies,cloudasset.assets.searchAllResources,essentialcontacts.contacts.list,iam.accesspolicies.list,iam.policybindings.list,iam.roles.list,iam.serviceAccountKeys.list,iam.serviceAccounts.list,logging.logEntries.list,logging.logs.list,orgpolicy.constraints.list,orgpolicy.customConstraints.list,orgpolicy.policies.list,resourcemanager.folders.get,resourcemanager.organizations.get,resourcemanager.projects.get,run.jobs.list,run.services.list,run.workerpools.list,securitycenter.findings.list,serviceusage.services.list,storage.buckets.list,storage.hmacKeys.list"
+SCOPES="https://www.googleapis.com/auth/cloud-platform,https://www.googleapis.com/auth/admin.directory.domain.readonly,https://www.googleapis.com/auth/admin.directory.group.member.readonly,https://www.googleapis.com/auth/admin.directory.group.readonly,https://www.googleapis.com/auth/admin.directory.rolemanagement.readonly,https://www.googleapis.com/auth/admin.directory.user.readonly,https://www.googleapis.com/auth/admin.directory.user.security,https://www.googleapis.com/auth/admin.reports.audit.readonly,https://www.googleapis.com/auth/apps.security,https://www.googleapis.com/auth/cloud-identity.policies.readonly"
 
 # Load saved configuration if it exists
 if [ -f "$DEPLOY_CONFIG_FILE" ]; then
@@ -169,7 +169,7 @@ if [ -z "$SELECTED_ORG_ID" ]; then
     echo "===================================================="
     echo " Fetching available Organizations..."
     echo "===================================================="
-    
+
     # Fetch orgs and parse into arrays
     orgs=()
     org_ids=()
@@ -179,12 +179,12 @@ if [ -z "$SELECTED_ORG_ID" ]; then
             org_ids+=("$id")
         fi
     done < <(gcloud organizations list --format="value(displayName,ID)")
-    
+
     if [ ${#orgs[@]} -eq 0 ]; then
         echo "ERROR: No organizations found. Ensure you have 'roles/resourcemanager.organizationViewer' permissions."
         exit 1
     fi
-    
+
     echo "Please select the organization to audit:"
     select opt in "${orgs[@]}"; do
         for i in "${!orgs[@]}"; do
