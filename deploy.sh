@@ -474,15 +474,17 @@ echo ""
 
 if [[ "$DWD_CONFIRM" == "yes" ]]; then
     PAYLOAD="{
+      \"collectorId\": \"$COLLECTOR_ID\",
       \"projectNumber\": \"$PROJECT_NUM\",
-      \"OrgName\": \"$SELECTED_ORG_NAME\",
+      \"orgName\": \"$SELECTED_ORG_NAME\",
       \"superAdminEmail\": \"$SUPER_ADMIN_EMAIL\",
       \"serviceAccountEmail\": \"$SA_EMAIL\"
     }"
 else
     PAYLOAD="{
+      \"collectorId\": \"$COLLECTOR_ID\",
       \"projectNumber\": \"$PROJECT_NUM\",
-      \"OrgName\": \"$SELECTED_ORG_NAME\",
+      \"orgName\": \"$SELECTED_ORG_NAME\",
       \"serviceAccountEmail\": \"$SA_EMAIL\"
     }"
 fi
