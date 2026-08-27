@@ -10,6 +10,7 @@ This tool automates the deployment of infrastructure necessary to run the Chrono
 - **Service Account**: A service account with minimal required permissions for security assessment
 - **Workload Identity Pool**: X.509-based workload identity for secure authentication
 - **Custom IAM Role**: Organization-level role with only necessary audit permissions
+- **JWT Signer Role**: Project-level role allowing the collector service account to sign only its own delegation JWTs
 - **Domain-Wide Delegation**: Integration with Google Workspace for data collection
 
 ## Prerequisites
@@ -58,6 +59,7 @@ After the project is available, the script verifies it can be read and its enabl
   - Service usage monitoring
   - Storage bucket auditing
   - And more...
+- **JWT Signer Role**: Project-level custom role containing only `iam.serviceAccounts.signJwt`, bound on the collector service account to itself
 
 ## Cleanup
 

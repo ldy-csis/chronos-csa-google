@@ -66,6 +66,7 @@ workload_identity_provider_exists() {
 
 PROJECT_NAME="CSIS-CSA-Resources"
 SA_ACCOUNT_ID="csis-csa-collector"
+JWT_SIGNER_ROLE_ID="csis_service_account_jwt_signer"
 POOL_ID="csis-identity-pool"
 PROVIDER_ID="csis-cert-provider"
 TRUST_ANCHOR_FILE="trust_anchor.pem"
@@ -75,6 +76,7 @@ DEPLOY_CONFIG_FILE=".deploy_config"
 GCP_SERVICES=(
     "cloudresourcemanager.googleapis.com"
     "iam.googleapis.com"
+    "iamcredentials.googleapis.com"
     "logging.googleapis.com"
     "cloudasset.googleapis.com"
     "serviceusage.googleapis.com"
@@ -227,7 +229,9 @@ echo "Organization:         $SELECTED_ORG_NAME ($SELECTED_ORG_ID)"
 echo "Project name:         $PROJECT_NAME"
 echo "Service account:      ${SA_ACCOUNT_ID}@<new-project>.iam.gserviceaccount.com"
 echo "Workload identity:    $POOL_ID / $PROVIDER_ID"
-echo "Custom role:          Organization-level CSIS Collector role"
+echo "Organization role:    CSIS Collector audit role"
+echo "Project role:         $JWT_SIGNER_ROLE_ID (iam.serviceAccounts.signJwt)"
+echo "IAM bindings:         Workload Identity User and service-account self-signing"
 echo ""
 read -r -p "Type 'yes' to create or update these resources: " DEPLOY_CONFIRM
 if [[ "$DEPLOY_CONFIRM" != "yes" ]]; then
@@ -409,6 +413,39 @@ gcloud organizations add-iam-policy-binding "$SELECTED_ORG_ID" \
     --role="organizations/${SELECTED_ORG_ID}/roles/${ROLE_ID}" \
     >/dev/null
 echo "-> Role bound to service account."
+
+# The collector signs its domain-wide delegation assertion as itself. Keep this
+# permission on the individual service account rather than the whole project.
+echo ""
+echo "===================================================="
+echo " Creating Service Account JWT Signer Role..."
+echo "===================================================="
+
+if gcloud iam roles describe "$JWT_SIGNER_ROLE_ID" --project="$PROJECT_ID" &>/dev/null; then
+    echo "-> Role '$JWT_SIGNER_ROLE_ID' already exists. Updating permissions..."
+    gcloud iam roles update "$JWT_SIGNER_ROLE_ID" \
+        --quiet \
+        --project="$PROJECT_ID" \
+        --title="CSIS Service Account JWT Signer" \
+        --stage="GA" \
+        --permissions="iam.serviceAccounts.signJwt"
+    echo "-> Role '$JWT_SIGNER_ROLE_ID' updated."
+else
+    gcloud iam roles create "$JWT_SIGNER_ROLE_ID" \
+        --quiet \
+        --project="$PROJECT_ID" \
+        --title="CSIS Service Account JWT Signer" \
+        --stage="GA" \
+        --permissions="iam.serviceAccounts.signJwt"
+    echo "-> Role '$JWT_SIGNER_ROLE_ID' created."
+fi
+
+gcloud iam service-accounts add-iam-policy-binding "$SA_EMAIL" \
+    --project="$PROJECT_ID" \
+    --member="serviceAccount:${SA_EMAIL}" \
+    --role="projects/${PROJECT_ID}/roles/${JWT_SIGNER_ROLE_ID}" \
+    >/dev/null
+echo "-> JWT signer role bound to service account."
 
 # Fetch the OAuth 2 Client ID (unique_id of the service account)
 CLIENT_ID=$(gcloud iam service-accounts describe "$SA_EMAIL" --project="$PROJECT_ID" --format="value(uniqueId)")
