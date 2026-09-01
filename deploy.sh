@@ -90,8 +90,44 @@ GCP_SERVICES=(
     "orgpolicy.googleapis.com"
 )
 
-ROLE_PERMISSIONS="apikeys.keys.list,cloudasset.assets.searchAllIamPolicies,cloudasset.assets.searchAllResources,essentialcontacts.contacts.list,iam.accesspolicies.list,iam.policybindings.list,iam.roles.list,iam.serviceAccountKeys.list,iam.serviceAccounts.list,logging.logEntries.list,logging.logs.list,orgpolicy.constraints.list,orgpolicy.customConstraints.list,orgpolicy.policies.list,resourcemanager.folders.get,resourcemanager.organizations.get,resourcemanager.projects.get,run.jobs.list,run.services.list,run.workerpools.list,securitycenter.findings.list,serviceusage.services.list,storage.buckets.list,storage.hmacKeys.list"
-SCOPES="https://www.googleapis.com/auth/cloud-platform,https://www.googleapis.com/auth/admin.directory.domain.readonly,https://www.googleapis.com/auth/admin.directory.group.member.readonly,https://www.googleapis.com/auth/admin.directory.group.readonly,https://www.googleapis.com/auth/admin.directory.rolemanagement.readonly,https://www.googleapis.com/auth/admin.directory.user.readonly,https://www.googleapis.com/auth/admin.directory.user.security,https://www.googleapis.com/auth/admin.reports.audit.readonly,https://www.googleapis.com/auth/apps.security,https://www.googleapis.com/auth/cloud-identity.policies.readonly"
+ROLE_PERMISSIONS="\
+apikeys.keys.list,\
+cloudasset.assets.searchAllIamPolicies,\
+cloudasset.assets.searchAllResources,\
+essentialcontacts.contacts.list,\
+iam.accesspolicies.list,\
+iam.principalaccessboundarypolicies.list,\
+iam.policybindings.list,\
+iam.roles.list,\
+iam.serviceAccountKeys.list,\
+iam.serviceAccounts.list,\
+logging.logEntries.list,\
+logging.logs.list,\
+orgpolicy.constraints.list,\
+orgpolicy.customConstraints.list,\
+orgpolicy.policies.list,\
+resourcemanager.folders.get,\
+resourcemanager.organizations.get,\
+resourcemanager.projects.get,\
+run.jobs.list,\
+run.services.list,\
+run.workerpools.list,\
+securitycenter.findings.list,\
+serviceusage.services.list,\
+storage.buckets.list,\
+storage.objects.list,\
+storage.hmacKeys.list"
+SCOPES="\
+https://www.googleapis.com/auth/cloud-platform,\
+https://www.googleapis.com/auth/admin.directory.domain.readonly,\
+https://www.googleapis.com/auth/admin.directory.group.member.readonly,\
+https://www.googleapis.com/auth/admin.directory.group.readonly,\
+https://www.googleapis.com/auth/admin.directory.rolemanagement.readonly,\
+https://www.googleapis.com/auth/admin.directory.user.readonly,\
+https://www.googleapis.com/auth/admin.directory.user.security,\
+https://www.googleapis.com/auth/admin.reports.audit.readonly,\
+https://www.googleapis.com/auth/apps.security,\
+https://www.googleapis.com/auth/cloud-identity.policies.readonly"
 
 # Load saved configuration if it exists
 if [ -f "$DEPLOY_CONFIG_FILE" ]; then
