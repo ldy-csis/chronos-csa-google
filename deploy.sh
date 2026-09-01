@@ -69,6 +69,7 @@ SA_ACCOUNT_ID="csis-csa-collector"
 JWT_SIGNER_ROLE_ID="csis_service_account_jwt_signer"
 POOL_ID="csis-identity-pool"
 PROVIDER_ID="csis-cert-provider"
+CERTIFICATE_SUBJECT="example"
 TRUST_ANCHOR_FILE="trust_anchor.pem"
 TRUST_STORE_CONFIG_FILE=".trust_store_config.generated.yaml"
 DEPLOY_CONFIG_FILE=".deploy_config"
@@ -267,7 +268,7 @@ echo "Service account:      ${SA_ACCOUNT_ID}@<new-project>.iam.gserviceaccount.c
 echo "Workload identity:    $POOL_ID / $PROVIDER_ID"
 echo "Organization role:    CSIS Collector audit role"
 echo "Project role:         $JWT_SIGNER_ROLE_ID (iam.serviceAccounts.signJwt)"
-echo "IAM bindings:         Workload Identity User and service-account self-signing"
+echo "IAM bindings:         Workload Identity User and federated JWT signing"
 echo ""
 read -r -p "Type 'yes' to create or update these resources: " DEPLOY_CONFIRM
 if [[ "$DEPLOY_CONFIRM" != "yes" ]]; then
@@ -307,6 +308,7 @@ fi
 wait_for "project '$PROJECT_ID' to become active" 30 5 \
     project_is_active
 PROJECT_NUM=$(gcloud projects describe "$PROJECT_ID" --format="value(projectNumber)")
+FEDERATED_PRINCIPAL="principal://iam.googleapis.com/projects/${PROJECT_NUM}/locations/global/workloadIdentityPools/${POOL_ID}/subject/${CERTIFICATE_SUBJECT}"
 
 # Project-scoped permissions cannot be evaluated until the project exists.
 echo ""
@@ -403,7 +405,7 @@ echo "===================================================="
 gcloud iam service-accounts add-iam-policy-binding "$SA_EMAIL" \
     --project="$PROJECT_ID" \
     --role="roles/iam.workloadIdentityUser" \
-    --member="principalSet://iam.googleapis.com/projects/${PROJECT_NUM}/locations/global/workloadIdentityPools/${POOL_ID}/attribute.subject/example" \
+    --member="$FEDERATED_PRINCIPAL" \
     >/dev/null
 echo "-> Binding applied."
 
@@ -450,8 +452,8 @@ gcloud organizations add-iam-policy-binding "$SELECTED_ORG_ID" \
     >/dev/null
 echo "-> Role bound to service account."
 
-# The collector signs its domain-wide delegation assertion as itself. Keep this
-# permission on the individual service account rather than the whole project.
+# The federated workload signs the domain-wide delegation assertion through the
+# service account. Keep this permission on that service account instead of the project.
 echo ""
 echo "===================================================="
 echo " Creating Service Account JWT Signer Role..."
@@ -478,10 +480,10 @@ fi
 
 gcloud iam service-accounts add-iam-policy-binding "$SA_EMAIL" \
     --project="$PROJECT_ID" \
-    --member="serviceAccount:${SA_EMAIL}" \
+    --member="$FEDERATED_PRINCIPAL" \
     --role="projects/${PROJECT_ID}/roles/${JWT_SIGNER_ROLE_ID}" \
     >/dev/null
-echo "-> JWT signer role bound to service account."
+echo "-> JWT signer role bound to federated workload."
 
 # Fetch the OAuth 2 Client ID (unique_id of the service account)
 CLIENT_ID=$(gcloud iam service-accounts describe "$SA_EMAIL" --project="$PROJECT_ID" --format="value(uniqueId)")
