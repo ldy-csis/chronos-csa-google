@@ -69,7 +69,7 @@ SA_ACCOUNT_ID="csis-csa-collector"
 JWT_SIGNER_ROLE_ID="csis_service_account_jwt_signer"
 POOL_ID="csis-identity-pool"
 PROVIDER_ID="csis-cert-provider"
-CERTIFICATE_SUBJECT="example"
+CERTIFICATE_SUBJECT="csis-test-collector"
 TRUST_ANCHOR_FILE="trust_anchor.pem"
 TRUST_STORE_CONFIG_FILE=".trust_store_config.generated.yaml"
 DEPLOY_CONFIG_FILE=".deploy_config"
@@ -119,7 +119,6 @@ storage.buckets.list,\
 storage.objects.list,\
 storage.hmacKeys.list"
 SCOPES="\
-https://www.googleapis.com/auth/cloud-platform,\
 https://www.googleapis.com/auth/admin.directory.domain.readonly,\
 https://www.googleapis.com/auth/admin.directory.group.member.readonly,\
 https://www.googleapis.com/auth/admin.directory.group.readonly,\
@@ -127,7 +126,7 @@ https://www.googleapis.com/auth/admin.directory.rolemanagement.readonly,\
 https://www.googleapis.com/auth/admin.directory.user.readonly,\
 https://www.googleapis.com/auth/admin.directory.user.security,\
 https://www.googleapis.com/auth/admin.reports.audit.readonly,\
-https://www.googleapis.com/auth/apps.security,\
+https://www.googleapis.com/auth/admin.directory.orgunit.readonly,\
 https://www.googleapis.com/auth/cloud-identity.policies.readonly"
 
 # Load saved configuration if it exists
