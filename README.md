@@ -16,8 +16,8 @@ Authentication uses the uploaded certificate key, not a workload identity pool o
 - A Google Cloud account with permissions to:
   - List and read organizations, read the selected organization's IAM policy, and list its custom roles.
   - Create projects in the selected organization, or manage an existing CSA project.
-  - Enable APIs, create service accounts, and upload service account public keys.
-  - Disable enforcement of `constraints/iam.disableServiceAccountKeyUpload` on the CSA project.
+  - Enable APIs, create service accounts, list service account keys, and upload service account public keys.
+  - Disable enforcement of `constraints/iam.disableServiceAccountKeyUpload` on the CSA project when the expected key is absent.
   - Create or update organization custom roles and add organization IAM policy bindings.
 - A Google Workspace Super Admin email address. Super Admin access is required to configure Domain-Wide Delegation if Workspace collection is wanted.
 
@@ -46,6 +46,8 @@ After deployment is approved, `.deploy_config` saves `COLLECTOR_ID`, `SUPER_ADMI
 Before changing cloud resources, the script checks that the active account can read the organization, its IAM policy, and custom roles. It displays a deployment summary and requires `yes` to proceed; any other response exits without creating resources or saving deployment configuration. Authentication may still update local credentials before this confirmation.
 
 After the project is available, the script checks project access and waits with bounded retries for the project, enabled APIs, and service account to become available. These checks do not preflight every required create or update permission; later commands can still fail if access is missing.
+
+Before uploading, the script lists the service account keys and looks for the expected key ID configured in `DEPLOY_KEY_ID`. An existing enabled key is reused without changing the upload policy or uploading again. If that key is disabled, deployment stops with an error; unrelated keys do not prevent upload.
 
 The script reuses the first active project it finds with display name `CSIS-CSA-Resources`. This lookup is not scoped to the selected organization, so verify that the deploying account does not have a same-named CSA project in another organization.
 

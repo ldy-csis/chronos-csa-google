@@ -56,6 +56,7 @@ PROJECT_NAME="CSIS-CSA-Resources"
 SA_ACCOUNT_ID="csis-csa-collector"
 DEFAULT_BASE_URL="https://csa.cs-staging.csis.com"
 DEPLOY_CERTIFICATE_FILE="deploy-certificate.pem"
+DEPLOY_KEY_ID="170637f07a31b92389eeadeaaf0267ffc326fe62"
 DEPLOY_CONFIG_FILE=".deploy_config"
 
 GCP_SERVICES=(
@@ -328,40 +329,66 @@ fi
 wait_for "service account '$SA_EMAIL'" 12 5 \
     service_account_exists
 
-# Allow upload of the CSIS public certificate even when the organization
-# enforces the service-account key-upload constraint by default.
 echo ""
 echo "===================================================="
-echo " Allowing Service Account Public-Key Upload..."
+echo " Listing Existing Service Account Keys..."
 echo "===================================================="
-gcloud resource-manager org-policies disable-enforce \
-    constraints/iam.disableServiceAccountKeyUpload \
-    --project="$PROJECT_ID" \
-    --quiet
-echo "-> Public-key upload is allowed for '$PROJECT_ID'."
-
-echo ""
-echo "===================================================="
-echo " Uploading CSIS Service Account Certificate..."
-echo "===================================================="
-if KEY_OUTPUT=$(gcloud iam service-accounts keys upload "$DEPLOY_CERTIFICATE_FILE" \
+EXISTING_KEYS=$(gcloud iam service-accounts keys list \
     --iam-account="$SA_EMAIL" \
     --project="$PROJECT_ID" \
-    --format="value(name)" 2>&1); then
-    KEY_NAME="$KEY_OUTPUT"
-    echo "-> Certificate uploaded."
-elif [[ "$KEY_OUTPUT" =~ (ALREADY_EXISTS|[Aa]lready[[:space:]]exists) ]] && \
-    KEY_NAME=$(printf '%s\n' "$KEY_OUTPUT" | grep -oE '(keys/)?[0-9a-fA-F]{40}' | head -n 1); then
-    echo "-> Certificate key already exists; reusing it."
-else
-    echo "$KEY_OUTPUT" >&2
-    echo "ERROR: Failed to upload the CSIS service account certificate."
-    exit 1
+    --format="value(name,disabled)")
+printf '%s\n' "$EXISTING_KEYS"
+
+KEY_NAME=""
+while IFS=$'\t' read -r EXISTING_KEY_NAME EXISTING_KEY_DISABLED; do
+    if [ "${EXISTING_KEY_NAME##*/}" = "$DEPLOY_KEY_ID" ]; then
+        if [ "${EXISTING_KEY_DISABLED,,}" = "true" ]; then
+            echo "ERROR: Service account key '$DEPLOY_KEY_ID' already exists but is disabled." >&2
+            exit 1
+        fi
+
+        KEY_NAME="$EXISTING_KEY_NAME"
+        echo "-> Service account key '$DEPLOY_KEY_ID' already exists; skipping upload."
+        break
+    fi
+done <<< "$EXISTING_KEYS"
+
+if [ -z "$KEY_NAME" ]; then
+    # Allow upload of the CSIS public certificate even when the organization
+    # enforces the service-account key-upload constraint by default.
+    echo ""
+    echo "===================================================="
+    echo " Allowing Service Account Public-Key Upload..."
+    echo "===================================================="
+    gcloud resource-manager org-policies disable-enforce \
+        constraints/iam.disableServiceAccountKeyUpload \
+        --project="$PROJECT_ID" \
+        --quiet
+    echo "-> Public-key upload is allowed for '$PROJECT_ID'."
+
+    echo ""
+    echo "===================================================="
+    echo " Uploading CSIS Service Account Certificate..."
+    echo "===================================================="
+    if KEY_OUTPUT=$(gcloud iam service-accounts keys upload "$DEPLOY_CERTIFICATE_FILE" \
+        --iam-account="$SA_EMAIL" \
+        --project="$PROJECT_ID" \
+        --format="value(name)" 2>&1); then
+        KEY_NAME="$KEY_OUTPUT"
+        echo "-> Certificate uploaded."
+    elif [[ "$KEY_OUTPUT" =~ (ALREADY_EXISTS|[Aa]lready[[:space:]]exists) ]] && \
+        KEY_NAME=$(printf '%s\n' "$KEY_OUTPUT" | grep -oE '(keys/)?[0-9a-fA-F]{40}' | head -n 1); then
+        echo "-> Certificate key already exists; reusing it."
+    else
+        echo "$KEY_OUTPUT" >&2
+        echo "ERROR: Failed to upload the CSIS service account certificate."
+        exit 1
+    fi
 fi
 
 SERVICE_ACCOUNT_KEY_ID="${KEY_NAME##*/}"
-if ! [[ "$SERVICE_ACCOUNT_KEY_ID" =~ ^[0-9a-fA-F]{40}$ ]]; then
-    echo "ERROR: Could not determine the uploaded service account key ID."
+if [ "$SERVICE_ACCOUNT_KEY_ID" != "$DEPLOY_KEY_ID" ]; then
+    echo "ERROR: Expected service account key ID '$DEPLOY_KEY_ID', but received '$SERVICE_ACCOUNT_KEY_ID'."
     exit 1
 fi
 echo "-> Service account key ID: '$SERVICE_ACCOUNT_KEY_ID'."
