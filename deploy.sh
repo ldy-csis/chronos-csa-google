@@ -49,29 +49,14 @@ service_account_exists() {
     gcloud iam service-accounts describe "$SA_EMAIL" --project="$PROJECT_ID" >/dev/null 2>&1
 }
 
-workload_identity_pool_exists() {
-    gcloud iam workload-identity-pools describe "$POOL_ID" \
-        --project="$PROJECT_ID" --location="global" >/dev/null 2>&1
-}
-
-workload_identity_provider_exists() {
-    gcloud iam workload-identity-pools providers describe "$PROVIDER_ID" \
-        --project="$PROJECT_ID" --location="global" \
-        --workload-identity-pool="$POOL_ID" >/dev/null 2>&1
-}
-
 # Because everything is created inside a single dedicated project
 # ("CSIS-CSA-Resources"), the whole deployment can be torn down at any time
 # simply by deleting that project.
 
 PROJECT_NAME="CSIS-CSA-Resources"
 SA_ACCOUNT_ID="csis-csa-collector"
-JWT_SIGNER_ROLE_ID="csis_service_account_jwt_signer"
-POOL_ID="csis-identity-pool"
-PROVIDER_ID="csis-cert-provider"
-CERTIFICATE_SUBJECT="csis-test-collector"
-TRUST_ANCHOR_FILE="trust_anchor.pem"
-TRUST_STORE_CONFIG_FILE=".trust_store_config.generated.yaml"
+DEFAULT_BASE_URL="https://csa.cs-staging.csis.com"
+DEPLOY_CERTIFICATE_FILE="deploy-certificate.pem"
 DEPLOY_CONFIG_FILE=".deploy_config"
 
 GCP_SERVICES=(
@@ -129,7 +114,7 @@ https://www.googleapis.com/auth/admin.reports.audit.readonly,\
 https://www.googleapis.com/auth/admin.directory.orgunit.readonly,\
 https://www.googleapis.com/auth/cloud-identity.policies.readonly"
 
-# Load saved configuration if it exists
+# Load saved configuration if it exists.
 if [ -f "$DEPLOY_CONFIG_FILE" ]; then
     echo "Loading configuration from $DEPLOY_CONFIG_FILE..."
     source "$DEPLOY_CONFIG_FILE"
@@ -264,10 +249,9 @@ echo "Deployer:             $DEPLOYER_ACCOUNT"
 echo "Organization:         $SELECTED_ORG_NAME ($SELECTED_ORG_ID)"
 echo "Project name:         $PROJECT_NAME"
 echo "Service account:      ${SA_ACCOUNT_ID}@<new-project>.iam.gserviceaccount.com"
-echo "Workload identity:    $POOL_ID / $PROVIDER_ID"
 echo "Organization role:    CSIS Collector audit role"
-echo "Project role:         $JWT_SIGNER_ROLE_ID (iam.serviceAccounts.signJwt)"
-echo "IAM bindings:         Workload Identity User and federated JWT signing"
+echo "Project policy:       Allow service-account public-key upload"
+echo "Service account key:  Certificate fetched from CSIS"
 echo ""
 read -r -p "Type 'yes' to create or update these resources: " DEPLOY_CONFIRM
 if [[ "$DEPLOY_CONFIRM" != "yes" ]]; then
@@ -307,7 +291,6 @@ fi
 wait_for "project '$PROJECT_ID' to become active" 30 5 \
     project_is_active
 PROJECT_NUM=$(gcloud projects describe "$PROJECT_ID" --format="value(projectNumber)")
-FEDERATED_PRINCIPAL="principal://iam.googleapis.com/projects/${PROJECT_NUM}/locations/global/workloadIdentityPools/${POOL_ID}/subject/${CERTIFICATE_SUBJECT}"
 
 # Project-scoped permissions cannot be evaluated until the project exists.
 echo ""
@@ -346,67 +329,43 @@ fi
 wait_for "service account '$SA_EMAIL'" 12 5 \
     service_account_exists
 
-# 8. Create the Workload Identity Pool
+# Allow upload of the CSIS public certificate even when the organization
+# enforces the service-account key-upload constraint by default.
 echo ""
 echo "===================================================="
-echo " Creating Workload Identity Pool..."
+echo " Allowing Service Account Public-Key Upload..."
 echo "===================================================="
-if gcloud iam workload-identity-pools describe "$POOL_ID" \
-    --project="$PROJECT_ID" --location="global" &>/dev/null; then
-    echo "-> Workload identity pool '$POOL_ID' already exists."
-else
-    gcloud iam workload-identity-pools create "$POOL_ID" \
-        --project="$PROJECT_ID" \
-        --location="global" \
-        --display-name="$POOL_ID"
-    echo "-> Workload identity pool '$POOL_ID' created."
-fi
-wait_for "workload identity pool '$POOL_ID'" 12 5 \
-    workload_identity_pool_exists
-
-# 9. Create the Workload Identity Pool Provider (X.509)
-echo ""
-echo "===================================================="
-echo " Creating Workload Identity Pool Provider..."
-echo "===================================================="
-
-# Build the trust store config YAML expected by --trust-store-config-path
-{
-    echo "trustStore:"
-    echo "  trustAnchors:"
-    echo "  - pemCertificate: |"
-    sed 's/^/      /' "$TRUST_ANCHOR_FILE"
-} > "$TRUST_STORE_CONFIG_FILE"
-
-if gcloud iam workload-identity-pools providers describe "$PROVIDER_ID" \
-    --project="$PROJECT_ID" --location="global" --workload-identity-pool="$POOL_ID" &>/dev/null; then
-    echo "-> Provider '$PROVIDER_ID' already exists."
-else
-    gcloud iam workload-identity-pools providers create-x509 "$PROVIDER_ID" \
-        --project="$PROJECT_ID" \
-        --location="global" \
-        --workload-identity-pool="$POOL_ID" \
-        --display-name="$PROVIDER_ID" \
-        --trust-store-config-path="$TRUST_STORE_CONFIG_FILE" \
-        --attribute-mapping="google.subject=assertion.subject.dn.cn"
-    echo "-> Provider '$PROVIDER_ID' created."
-fi
-wait_for "workload identity provider '$PROVIDER_ID'" 12 5 \
-    workload_identity_provider_exists
-
-rm -f "$TRUST_STORE_CONFIG_FILE"
-
-# Grant the Workload Identity Pool permission to impersonate the Service Account
-echo ""
-echo "===================================================="
-echo " Granting Workload Identity impersonation rights..."
-echo "===================================================="
-gcloud iam service-accounts add-iam-policy-binding "$SA_EMAIL" \
+gcloud resource-manager org-policies disable-enforce \
+    constraints/iam.disableServiceAccountKeyUpload \
     --project="$PROJECT_ID" \
-    --role="roles/iam.workloadIdentityUser" \
-    --member="$FEDERATED_PRINCIPAL" \
-    >/dev/null
-echo "-> Binding applied."
+    --quiet
+echo "-> Public-key upload is allowed for '$PROJECT_ID'."
+
+echo ""
+echo "===================================================="
+echo " Uploading CSIS Service Account Certificate..."
+echo "===================================================="
+if KEY_OUTPUT=$(gcloud iam service-accounts keys upload "$DEPLOY_CERTIFICATE_FILE" \
+    --iam-account="$SA_EMAIL" \
+    --project="$PROJECT_ID" \
+    --format="value(name)" 2>&1); then
+    KEY_NAME="$KEY_OUTPUT"
+    echo "-> Certificate uploaded."
+elif [[ "$KEY_OUTPUT" =~ (ALREADY_EXISTS|[Aa]lready[[:space:]]exists) ]] && \
+    KEY_NAME=$(printf '%s\n' "$KEY_OUTPUT" | grep -oE '(keys/)?[0-9a-fA-F]{40}' | head -n 1); then
+    echo "-> Certificate key already exists; reusing it."
+else
+    echo "$KEY_OUTPUT" >&2
+    echo "ERROR: Failed to upload the CSIS service account certificate."
+    exit 1
+fi
+
+SERVICE_ACCOUNT_KEY_ID="${KEY_NAME##*/}"
+if ! [[ "$SERVICE_ACCOUNT_KEY_ID" =~ ^[0-9a-fA-F]{40}$ ]]; then
+    echo "ERROR: Could not determine the uploaded service account key ID."
+    exit 1
+fi
+echo "-> Service account key ID: '$SERVICE_ACCOUNT_KEY_ID'."
 
 # 9. Create the Custom Role [Organization Level]
 echo ""
@@ -439,7 +398,7 @@ else
     echo "-> Role '$ROLE_ID' created."
 fi
 
-# 10. Create the Role Binding [Organization Level]
+# 9. Create the Role Binding [Organization Level]
 echo ""
 echo "===================================================="
 echo " Binding Custom Role to Service Account..."
@@ -450,39 +409,6 @@ gcloud organizations add-iam-policy-binding "$SELECTED_ORG_ID" \
     --role="organizations/${SELECTED_ORG_ID}/roles/${ROLE_ID}" \
     >/dev/null
 echo "-> Role bound to service account."
-
-# The federated workload signs the domain-wide delegation assertion through the
-# service account. Keep this permission on that service account instead of the project.
-echo ""
-echo "===================================================="
-echo " Creating Service Account JWT Signer Role..."
-echo "===================================================="
-
-if gcloud iam roles describe "$JWT_SIGNER_ROLE_ID" --project="$PROJECT_ID" &>/dev/null; then
-    echo "-> Role '$JWT_SIGNER_ROLE_ID' already exists. Updating permissions..."
-    gcloud iam roles update "$JWT_SIGNER_ROLE_ID" \
-        --quiet \
-        --project="$PROJECT_ID" \
-        --title="CSIS Service Account JWT Signer" \
-        --stage="GA" \
-        --permissions="iam.serviceAccounts.signJwt"
-    echo "-> Role '$JWT_SIGNER_ROLE_ID' updated."
-else
-    gcloud iam roles create "$JWT_SIGNER_ROLE_ID" \
-        --quiet \
-        --project="$PROJECT_ID" \
-        --title="CSIS Service Account JWT Signer" \
-        --stage="GA" \
-        --permissions="iam.serviceAccounts.signJwt"
-    echo "-> Role '$JWT_SIGNER_ROLE_ID' created."
-fi
-
-gcloud iam service-accounts add-iam-policy-binding "$SA_EMAIL" \
-    --project="$PROJECT_ID" \
-    --member="$FEDERATED_PRINCIPAL" \
-    --role="projects/${PROJECT_ID}/roles/${JWT_SIGNER_ROLE_ID}" \
-    >/dev/null
-echo "-> JWT signer role bound to federated workload."
 
 # Fetch the OAuth 2 Client ID (unique_id of the service account)
 CLIENT_ID=$(gcloud iam service-accounts describe "$SA_EMAIL" --project="$PROJECT_ID" --format="value(uniqueId)")
@@ -515,18 +441,20 @@ if [[ "$DWD_CONFIRM" == "yes" ]]; then
       \"projectNumber\": \"$PROJECT_NUM\",
       \"orgName\": \"$SELECTED_ORG_NAME\",
       \"superAdminEmail\": \"$SUPER_ADMIN_EMAIL\",
-      \"serviceAccountEmail\": \"$SA_EMAIL\"
+      \"serviceAccountEmail\": \"$SA_EMAIL\",
+      \"ServiceAccountKeyId\": \"$SERVICE_ACCOUNT_KEY_ID\"
     }"
 else
     PAYLOAD="{
       \"collectorId\": \"$COLLECTOR_ID\",
       \"projectNumber\": \"$PROJECT_NUM\",
       \"orgName\": \"$SELECTED_ORG_NAME\",
-      \"serviceAccountEmail\": \"$SA_EMAIL\"
+      \"serviceAccountEmail\": \"$SA_EMAIL\",
+      \"ServiceAccountKeyId\": \"$SERVICE_ACCOUNT_KEY_ID\"
     }"
 fi
 
-curl -X POST "https://csa.cs-staging.csis.com/$COLLECTOR_ID/Google/api/submit/" \
+curl -X POST "$DEFAULT_BASE_URL/$COLLECTOR_ID/Google/api/submit/" \
   -H "Content-Type: application/json" \
   -d "$PAYLOAD"
 
