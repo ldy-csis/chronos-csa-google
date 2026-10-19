@@ -73,19 +73,23 @@ if [ -z "$SELECTED_ORG_NAME" ]; then
 fi
 
 # Restrict project discovery to the selected organization so resources elsewhere are untouched.
-mapfile -t PROJECTS < <(gcloud projects list \
+PROJECT_OUTPUT=$(gcloud projects list \
     --filter="parent.id=$SELECTED_ORG_ID AND parent.type=organization AND projectId~'^${PROJECT_ID_PREFIX}'" \
     --format="value(projectId,name)" | sort)
-mapfile -t ROLE_IDS < <(gcloud iam roles list --organization="$SELECTED_ORG_ID" \
-    --format="value(name)" | grep "/roles/${ROLE_ID_PREFIX}" | sed 's|.*/||' | sort || true)
+mapfile -t PROJECTS < <(printf '%s' "$PROJECT_OUTPUT")
+ROLE_OUTPUT=$(gcloud iam roles list --organization="$SELECTED_ORG_ID" \
+    --filter="name~'/roles/${ROLE_ID_PREFIX}'" \
+    --format="value(name)" | sed 's|.*/||' | sort)
+mapfile -t ROLE_IDS < <(printf '%s' "$ROLE_OUTPUT")
 
 BINDING_ROLES=()
 BINDING_MEMBERS=()
 for role_id in "${ROLE_IDS[@]}"; do
     role="organizations/${SELECTED_ORG_ID}/roles/${role_id}"
-    mapfile -t MEMBERS < <(gcloud organizations get-iam-policy "$SELECTED_ORG_ID" \
+    MEMBER_OUTPUT=$(gcloud organizations get-iam-policy "$SELECTED_ORG_ID" \
         --flatten="bindings[].members" --filter="bindings.role=$role" \
         --format="value(bindings.members)" | sort -u)
+    mapfile -t MEMBERS < <(printf '%s' "$MEMBER_OUTPUT")
 
     for member in "${MEMBERS[@]}"; do
         if [ -n "$member" ]; then
@@ -97,6 +101,8 @@ done
 
 if [ ${#PROJECTS[@]} -eq 0 ] && [ ${#ROLE_IDS[@]} -eq 0 ]; then
     echo "No Chronos CSA projects or organization roles were found in '$SELECTED_ORG_NAME' ($SELECTED_ORG_ID)."
+    echo "Google Workspace Domain-Wide Delegation is not checked. Remove the collector's client entry manually if it still exists:"
+    echo "https://admin.google.com/ac/owl/domainwidedelegation"
     exit 0
 fi
 
@@ -129,6 +135,9 @@ fi
 
 echo ""
 echo "The script will remove bindings for these roles, delete the roles, then delete the projects."
+echo "Deleting a project also removes its service account, uploaded certificate key, and project policy override."
+echo "Google Workspace Domain-Wide Delegation must be removed manually; record the collector's client ID before continuing."
+echo "https://admin.google.com/ac/owl/domainwidedelegation"
 read -r -p "Type 'yes' to permanently start this cleanup: " CLEANUP_CONFIRM
 if [[ "$CLEANUP_CONFIRM" != "yes" ]]; then
     echo "Cleanup cancelled. No resources were changed."
@@ -159,3 +168,4 @@ done
 
 rm -f "$DEPLOY_CONFIG_FILE"
 echo "Cleanup complete. Project deletion is scheduled by Google Cloud and may be recoverable only during its retention period."
+echo "Remove the collector's client entry from Google Workspace Domain-Wide Delegation if it was configured."

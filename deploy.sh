@@ -49,9 +49,8 @@ service_account_exists() {
     gcloud iam service-accounts describe "$SA_EMAIL" --project="$PROJECT_ID" >/dev/null 2>&1
 }
 
-# Because everything is created inside a single dedicated project
-# ("CSIS-CSA-Resources"), the whole deployment can be torn down at any time
-# simply by deleting that project.
+# Project resources live in "CSIS-CSA-Resources". Use cleanup.sh to also
+# remove the organization-level audit role and its binding.
 
 PROJECT_NAME="CSIS-CSA-Resources"
 SA_ACCOUNT_ID="csis-csa-collector"
@@ -130,8 +129,8 @@ for command in gcloud curl; do
     fi
 done
 
-if [ ! -f "$TRUST_ANCHOR_FILE" ]; then
-    echo "ERROR: '$TRUST_ANCHOR_FILE' not found. It is required to configure the X.509 provider."
+if [ ! -f "$DEPLOY_CERTIFICATE_FILE" ]; then
+    echo "ERROR: '$DEPLOY_CERTIFICATE_FILE' not found. It is required to upload the CSIS service account certificate."
     exit 1
 fi
 
@@ -251,7 +250,7 @@ echo "Project name:         $PROJECT_NAME"
 echo "Service account:      ${SA_ACCOUNT_ID}@<new-project>.iam.gserviceaccount.com"
 echo "Organization role:    CSIS Collector audit role"
 echo "Project policy:       Allow service-account public-key upload"
-echo "Service account key:  Certificate fetched from CSIS"
+echo "Service account key:  Public certificate from $DEPLOY_CERTIFICATE_FILE"
 echo ""
 read -r -p "Type 'yes' to create or update these resources: " DEPLOY_CONFIRM
 if [[ "$DEPLOY_CONFIRM" != "yes" ]]; then
@@ -398,7 +397,7 @@ else
     echo "-> Role '$ROLE_ID' created."
 fi
 
-# 9. Create the Role Binding [Organization Level]
+# 10. Create the Role Binding [Organization Level]
 echo ""
 echo "===================================================="
 echo " Binding Custom Role to Service Account..."
