@@ -60,20 +60,17 @@ DEPLOY_KEY_ID="170637f07a31b92389eeadeaaf0267ffc326fe62"
 DEPLOY_CONFIG_FILE=".deploy_config"
 
 GCP_SERVICES=(
-    "cloudresourcemanager.googleapis.com"
-    "iam.googleapis.com"
-    "iamcredentials.googleapis.com"
-    "logging.googleapis.com"
-    "cloudasset.googleapis.com"
-    "serviceusage.googleapis.com"
-    "essentialcontacts.googleapis.com"
-    "securitycenter.googleapis.com"
-    "storage.googleapis.com"
-    "run.googleapis.com"
     "admin.googleapis.com"
-    "cloudidentity.googleapis.com"
     "apikeys.googleapis.com"
+    "cloudasset.googleapis.com"
+    "cloudidentity.googleapis.com"
+    "cloudresourcemanager.googleapis.com"
+    "essentialcontacts.googleapis.com"
+    "iam.googleapis.com"
+    "logging.googleapis.com"
     "orgpolicy.googleapis.com"
+    "securitycenter.googleapis.com"
+    "serviceusage.googleapis.com"
 )
 
 ROLE_PERMISSIONS="\
