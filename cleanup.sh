@@ -77,8 +77,13 @@ if [ -z "$SELECTED_ORG_NAME" ]; then
 fi
 
 
+# Prints the organization ID in a project's ancestry (get-ancestors does not support --filter).
+project_organization_id() {
+    gcloud projects get-ancestors "$1" --format="value(type,id)" | awk 'tolower($1) == "organization" { print $2 }'
+}
+
 project_in_selected_org() {
-    [ "$(gcloud projects get-ancestors "$1" --filter="type=organization" --format="value(id)")" = "$SELECTED_ORG_ID" ]
+    [ "$(project_organization_id "$1")" = "$SELECTED_ORG_ID" ]
 }
 
 # Proof that a project holds a Chronos CSA deployment: the collector service account exists

@@ -45,6 +45,11 @@ api_is_enabled() {
         --filter="config.name=$1" --format="value(config.name)" 2>/dev/null | grep -qx "$1"
 }
 
+# Prints the organization ID in a project's ancestry (get-ancestors does not support --filter).
+project_organization_id() {
+    gcloud projects get-ancestors "$1" --format="value(type,id)" | awk 'tolower($1) == "organization" { print $2 }'
+}
+
 # Fills the projects and project_ids arrays with accessible active projects in the selected organization.
 load_org_projects() {
     projects=()
@@ -55,8 +60,7 @@ load_org_projects() {
         --format="value(projectId,name)" --sort-by=name)
     while IFS=$'\t' read -r project_id project_name; do
         [ -n "$project_id" ] || continue
-        project_org=$(gcloud projects get-ancestors "$project_id" \
-            --filter="type=organization" --format="value(id)")
+        project_org=$(project_organization_id "$project_id")
         if [ "$project_org" = "$SELECTED_ORG_ID" ]; then
             projects+=("$project_name ($project_id)")
             project_ids+=("$project_id")
@@ -306,8 +310,7 @@ if [ -z "$PROJECT_ID" ]; then
 fi
 
 if [ "$CREATE_PROJECT" = false ]; then
-    PROJECT_ORG_ID=$(gcloud projects get-ancestors "$PROJECT_ID" \
-        --filter="type=organization" --format="value(id)")
+    PROJECT_ORG_ID=$(project_organization_id "$PROJECT_ID")
     if [ "$PROJECT_ORG_ID" != "$SELECTED_ORG_ID" ]; then
         echo "ERROR: Project '$PROJECT_ID' does not belong to organization '$SELECTED_ORG_ID'."
         exit 1
@@ -382,8 +385,7 @@ else
                 exit 1
             fi
             for access_project in "${ACCESS_PROJECTS[@]}"; do
-                access_project_org=$(gcloud projects get-ancestors "$access_project" \
-                    --filter="type=organization" --format="value(id)")
+                access_project_org=$(project_organization_id "$access_project")
                 if [ "$access_project_org" != "$SELECTED_ORG_ID" ]; then
                     echo "ERROR: Project '$access_project' does not belong to organization '$SELECTED_ORG_ID'."
                     exit 1
