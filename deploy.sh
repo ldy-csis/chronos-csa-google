@@ -45,12 +45,31 @@ api_is_enabled() {
         --filter="config.name=$1" --format="value(config.name)" 2>/dev/null | grep -qx "$1"
 }
 
+# Fills the projects and project_ids arrays with accessible active projects in the selected organization.
+load_org_projects() {
+    projects=()
+    project_ids=()
+    local project_output project_id project_name project_org
+    project_output=$(gcloud projects list \
+        --filter="lifecycleState=ACTIVE" \
+        --format="value(projectId,name)" --sort-by=name)
+    while IFS=$'\t' read -r project_id project_name; do
+        [ -n "$project_id" ] || continue
+        project_org=$(gcloud projects get-ancestors "$project_id" \
+            --filter="type=organization" --format="value(id)")
+        if [ "$project_org" = "$SELECTED_ORG_ID" ]; then
+            projects+=("$project_name ($project_id)")
+            project_ids+=("$project_id")
+        fi
+    done <<< "$project_output"
+}
+
 service_account_exists() {
     gcloud iam service-accounts describe "$SA_EMAIL" --project="$PROJECT_ID" >/dev/null 2>&1
 }
 
-# Project resources live in "CSIS-CSA-Resources". Use cleanup.sh to also
-# remove the organization-level audit role and its binding.
+# New project resources live in "CSIS-CSA-Resources"; existing projects can also be used.
+# Use cleanup.sh to also remove the organization-level audit role and its binding.
 
 PROJECT_NAME="CSIS-CSA-Resources"
 SA_ACCOUNT_ID="csis-csa-collector"
@@ -237,6 +256,148 @@ check_organization_access
 echo "-> Organization can be read and its IAM policy and custom roles can be listed."
 echo "-> The gcloud CLI cannot preflight individual create/update IAM permissions; commands will fail before dependent steps if access is missing."
 
+# 5. Choose a new dedicated project or an existing project in this organization.
+CREATE_PROJECT=false
+if [ -z "$PROJECT_ID" ]; then
+    echo ""
+    echo "===================================================="
+    echo " Project Selection"
+    echo "===================================================="
+    echo "Creating a dedicated project is the recommended deployment option."
+    select project_option in "Create a new project (recommended)" "Select an existing project"; do
+        case "$REPLY" in
+            1)
+                CREATE_PROJECT=true
+                PROJECT_ID="csis-csa-resources-$(openssl rand -hex 4 2>/dev/null || echo "$RANDOM$RANDOM")"
+                break
+                ;;
+            2)
+                load_org_projects
+
+                if [ ${#projects[@]} -eq 0 ]; then
+                    echo "No accessible active projects found in the selected organization. Choose to create a new project."
+                    continue
+                fi
+
+                echo "Select the project to deploy into:"
+                select project_option in "${projects[@]}"; do
+                    for i in "${!projects[@]}"; do
+                        if [ "$project_option" = "${projects[$i]}" ]; then
+                            PROJECT_ID="${project_ids[$i]}"
+                            break 2
+                        fi
+                    done
+                    echo "Invalid selection. Please try again."
+                done
+                [ -n "$PROJECT_ID" ] && break
+                ;;
+            *)
+                echo "Invalid selection. Please try again."
+                ;;
+        esac
+    done
+else
+    echo "Using PROJECT_ID from configuration or environment: '$PROJECT_ID'"
+fi
+
+if [ -z "$PROJECT_ID" ]; then
+    echo "ERROR: No project was selected."
+    exit 1
+fi
+
+if [ "$CREATE_PROJECT" = false ]; then
+    PROJECT_ORG_ID=$(gcloud projects get-ancestors "$PROJECT_ID" \
+        --filter="type=organization" --format="value(id)")
+    if [ "$PROJECT_ORG_ID" != "$SELECTED_ORG_ID" ]; then
+        echo "ERROR: Project '$PROJECT_ID' does not belong to organization '$SELECTED_ORG_ID'."
+        exit 1
+    fi
+    if ! project_is_active; then
+        echo "ERROR: Project '$PROJECT_ID' is not active or cannot be read."
+        exit 1
+    fi
+    PROJECT_NAME=$(gcloud projects describe "$PROJECT_ID" --format="value(name)")
+    check_project_access
+fi
+
+# 5b. Choose which projects the collector may audit.
+ACCESS_PROJECTS=()
+if [ -z "$ACCESS_MODE" ]; then
+    echo ""
+    echo "===================================================="
+    echo " Project Access"
+    echo "===================================================="
+    echo "Choose which projects the collector service account is granted access to."
+    select access_option in "All projects (organization-wide access)" "Selected projects"; do
+        case "$REPLY" in
+            1)
+                ACCESS_MODE="all"
+                break
+                ;;
+            2)
+                load_org_projects
+                if [ ${#projects[@]} -eq 0 ]; then
+                    echo "No accessible active projects found in the selected organization. Choose all projects instead."
+                    continue
+                fi
+
+                echo "Available projects:"
+                for i in "${!projects[@]}"; do
+                    printf '  %d) %s\n' "$((i + 1))" "${projects[$i]}"
+                done
+                while true; do
+                    read -r -p "Enter the project numbers to grant access to, separated by spaces or commas: " PROJECT_CHOICES
+                    ACCESS_PROJECTS=()
+                    valid=true
+                    for choice in ${PROJECT_CHOICES//,/ }; do
+                        if [[ "$choice" =~ ^[0-9]+$ ]] && [ "$choice" -ge 1 ] && [ "$choice" -le ${#projects[@]} ]; then
+                            candidate="${project_ids[$((choice - 1))]}"
+                            [[ " ${ACCESS_PROJECTS[*]} " == *" $candidate "* ]] || ACCESS_PROJECTS+=("$candidate")
+                        else
+                            echo "Invalid selection '$choice'."
+                            valid=false
+                        fi
+                    done
+                    if [ "$valid" = true ] && [ ${#ACCESS_PROJECTS[@]} -gt 0 ]; then
+                        break
+                    fi
+                    [ "$valid" = true ] && echo "Select at least one project."
+                done
+                ACCESS_MODE="selected"
+                break
+                ;;
+            *)
+                echo "Invalid selection. Please try again."
+                ;;
+        esac
+    done
+else
+    echo "Using ACCESS_MODE from configuration or environment: '$ACCESS_MODE'"
+    case "$ACCESS_MODE" in
+        all) ;;
+        selected)
+            read -ra ACCESS_PROJECTS <<< "$ACCESS_PROJECT_IDS"
+            if [ ${#ACCESS_PROJECTS[@]} -eq 0 ]; then
+                echo "ERROR: ACCESS_MODE is 'selected' but ACCESS_PROJECT_IDS is empty."
+                exit 1
+            fi
+            for access_project in "${ACCESS_PROJECTS[@]}"; do
+                access_project_org=$(gcloud projects get-ancestors "$access_project" \
+                    --filter="type=organization" --format="value(id)")
+                if [ "$access_project_org" != "$SELECTED_ORG_ID" ]; then
+                    echo "ERROR: Project '$access_project' does not belong to organization '$SELECTED_ORG_ID'."
+                    exit 1
+                fi
+            done
+            ;;
+        *)
+            echo "ERROR: ACCESS_MODE must be 'all' or 'selected'."
+            exit 1
+            ;;
+    esac
+fi
+ACCESS_PROJECT_IDS="${ACCESS_PROJECTS[*]}"
+
 # Require explicit confirmation before the first mutation.
 echo ""
 echo "===================================================="
@@ -245,8 +406,18 @@ echo "===================================================="
 echo "Deployer:             $DEPLOYER_ACCOUNT"
 echo "Organization:         $SELECTED_ORG_NAME ($SELECTED_ORG_ID)"
 echo "Project name:         $PROJECT_NAME"
-echo "Service account:      ${SA_ACCOUNT_ID}@<new-project>.iam.gserviceaccount.com"
+echo "Project ID:           $PROJECT_ID"
+echo "Create project:       $CREATE_PROJECT"
+echo "Service account:      ${SA_ACCOUNT_ID}@${PROJECT_ID}.iam.gserviceaccount.com"
 echo "Organization role:    CSIS Collector audit role"
+if [ "$ACCESS_MODE" = "all" ]; then
+    echo "Access scope:         All projects (role bound on the organization)"
+else
+    echo "Access scope:         Selected projects (role bound on each project)"
+    for access_project in "${ACCESS_PROJECTS[@]}"; do
+        echo "                        - $access_project"
+    done
+fi
 echo "Project policy:       Allow service-account public-key upload"
 echo "Service account key:  Public certificate from $DEPLOY_CERTIFICATE_FILE"
 echo ""
@@ -261,24 +432,13 @@ cat > "$DEPLOY_CONFIG_FILE" << EOF
 export COLLECTOR_ID="$COLLECTOR_ID"
 export SUPER_ADMIN_EMAIL="$SUPER_ADMIN_EMAIL"
 export SELECTED_ORG_ID="$SELECTED_ORG_ID"
+export ACCESS_MODE="$ACCESS_MODE"
+export ACCESS_PROJECT_IDS="$ACCESS_PROJECT_IDS"
 EOF
 echo "Configuration saved to $DEPLOY_CONFIG_FILE for resuming deployments"
 
-# 5. Check if project already exists, otherwise create it
-echo ""
-echo "===================================================="
-echo " Checking for existing '$PROJECT_NAME' project..."
-echo "===================================================="
-
-PROJECT_ID=$(gcloud projects list \
-    --filter="name='$PROJECT_NAME' AND lifecycleState='ACTIVE'" \
-    --format="value(projectId)" | head -n 1)
-
-if [ -n "$PROJECT_ID" ]; then
-    echo "-> Found existing project: '$PROJECT_ID'"
-else
-    PROJECT_ID="csis-csa-resources-$(openssl rand -hex 4 2>/dev/null || echo "$RANDOM$RANDOM")"
-    echo "-> No existing project found. Creating new project '$PROJECT_ID'..."
+if [ "$CREATE_PROJECT" = true ]; then
+    echo "-> Creating new project '$PROJECT_ID'..."
     gcloud projects create "$PROJECT_ID" \
         --name="$PROJECT_NAME" \
         --organization="$SELECTED_ORG_ID"
@@ -288,6 +448,7 @@ fi
 wait_for "project '$PROJECT_ID' to become active" 30 5 \
     project_is_active
 PROJECT_NUM=$(gcloud projects describe "$PROJECT_ID" --format="value(projectNumber)")
+printf 'export PROJECT_ID="%s"\n' "$PROJECT_ID" >> "$DEPLOY_CONFIG_FILE"
 
 # Project-scoped permissions cannot be evaluated until the project exists.
 echo ""
@@ -427,11 +588,21 @@ echo "===================================================="
 echo " Binding Custom Role to Service Account..."
 echo "===================================================="
 
-gcloud organizations add-iam-policy-binding "$SELECTED_ORG_ID" \
-    --member="serviceAccount:${SA_EMAIL}" \
-    --role="organizations/${SELECTED_ORG_ID}/roles/${ROLE_ID}" \
-    >/dev/null
-echo "-> Role bound to service account."
+if [ "$ACCESS_MODE" = "all" ]; then
+    gcloud organizations add-iam-policy-binding "$SELECTED_ORG_ID" \
+        --member="serviceAccount:${SA_EMAIL}" \
+        --role="organizations/${SELECTED_ORG_ID}/roles/${ROLE_ID}" \
+        >/dev/null
+    echo "-> Role bound to service account on organization '$SELECTED_ORG_ID'."
+else
+    for access_project in "${ACCESS_PROJECTS[@]}"; do
+        gcloud projects add-iam-policy-binding "$access_project" \
+            --member="serviceAccount:${SA_EMAIL}" \
+            --role="organizations/${SELECTED_ORG_ID}/roles/${ROLE_ID}" \
+            >/dev/null
+        echo "-> Role bound to service account on project '$access_project'."
+    done
+fi
 
 # Fetch the OAuth 2 Client ID (unique_id of the service account)
 CLIENT_ID=$(gcloud iam service-accounts describe "$SA_EMAIL" --project="$PROJECT_ID" --format="value(uniqueId)")

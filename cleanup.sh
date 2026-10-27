@@ -5,6 +5,10 @@ set -e
 
 PROJECT_ID_PREFIX="csis-csa-resources-"
 ROLE_ID_PREFIX="csis_collector_role_"
+SA_ACCOUNT_ID="csis-csa-collector"
+PROJECT_NAME="CSIS-CSA-Resources"
+ROLE_TITLE="CSIS Collector role"
+DEPLOY_KEY_ID="170637f07a31b92389eeadeaaf0267ffc326fe62"
 DEPLOY_CONFIG_FILE=".deploy_config"
 
 if [ -f "$DEPLOY_CONFIG_FILE" ]; then
@@ -72,34 +76,130 @@ if [ -z "$SELECTED_ORG_NAME" ]; then
     exit 1
 fi
 
-# Restrict project discovery to the selected organization so resources elsewhere are untouched.
+
+project_in_selected_org() {
+    [ "$(gcloud projects get-ancestors "$1" --filter="type=organization" --format="value(id)")" = "$SELECTED_ORG_ID" ]
+}
+
+# Proof that a project holds a Chronos CSA deployment: the collector service account exists
+# and carries the CSIS certificate key uploaded by deploy.sh.
+project_has_collector_key() {
+    gcloud iam service-accounts keys list \
+        --iam-account="${SA_ACCOUNT_ID}@${1}.iam.gserviceaccount.com" --project="$1" \
+        --format="value(name)" 2>/dev/null | sed 's|.*/||' | grep -qx "$DEPLOY_KEY_ID"
+}
+
+is_our_member() {
+    local project
+    for project in "${OUR_PROJECT_IDS[@]}"; do
+        [ "$1" = "serviceAccount:${SA_ACCOUNT_ID}@${project}.iam.gserviceaccount.com" ] && return 0
+    done
+    return 1
+}
+
+# Dedicated projects: ID prefix AND display name AND organization AND collector key must all match.
 PROJECT_OUTPUT=$(gcloud projects list \
-    --filter="parent.id=$SELECTED_ORG_ID AND parent.type=organization AND projectId~'^${PROJECT_ID_PREFIX}'" \
+    --filter="lifecycleState=ACTIVE AND projectId~'^${PROJECT_ID_PREFIX}' AND name='${PROJECT_NAME}'" \
     --format="value(projectId,name)" | sort)
-mapfile -t PROJECTS < <(printf '%s' "$PROJECT_OUTPUT")
+PROJECTS=()
+while IFS= read -r project; do
+    [ -n "$project" ] || continue
+    project_id=${project%%$'\t'*}
+    if project_in_selected_org "$project_id" && project_has_collector_key "$project_id"; then
+        PROJECTS+=("$project")
+    fi
+done <<< "$PROJECT_OUTPUT"
+
+# A reused project is never deleted. Only its collector service account is removed, and only
+# when .deploy_config names it and the account carries the CSIS certificate key.
+REUSED_PROJECT=""
+SA_EMAIL=""
+if [ -n "$PROJECT_ID" ] && [[ "$PROJECT_ID" != ${PROJECT_ID_PREFIX}* ]]; then
+    SA_EMAIL="${SA_ACCOUNT_ID}@${PROJECT_ID}.iam.gserviceaccount.com"
+    if project_in_selected_org "$PROJECT_ID" 2>/dev/null && project_has_collector_key "$PROJECT_ID"; then
+        REUSED_PROJECT="$PROJECT_ID"
+    fi
+fi
+
+# Only bindings of collector service accounts in these projects count as ours.
+OUR_PROJECT_IDS=()
+for project in "${PROJECTS[@]}"; do
+    OUR_PROJECT_IDS+=("${project%%$'\t'*}")
+done
+[ -n "$REUSED_PROJECT" ] && OUR_PROJECT_IDS+=("$REUSED_PROJECT")
+
+# Candidate roles: ID prefix AND the title deploy.sh gives them.
 ROLE_OUTPUT=$(gcloud iam roles list --organization="$SELECTED_ORG_ID" \
-    --filter="name~'/roles/${ROLE_ID_PREFIX}'" \
+    --filter="name~'/roles/${ROLE_ID_PREFIX}' AND title='${ROLE_TITLE}'" \
     --format="value(name)" | sed 's|.*/||' | sort)
-mapfile -t ROLE_IDS < <(printf '%s' "$ROLE_OUTPUT")
+mapfile -t CANDIDATE_ROLE_IDS < <(printf '%s' "$ROLE_OUTPUT")
 
 BINDING_ROLES=()
 BINDING_MEMBERS=()
-for role_id in "${ROLE_IDS[@]}"; do
+declare -A FOREIGN_ROLES=()
+for role_id in "${CANDIDATE_ROLE_IDS[@]}"; do
+    [ -n "$role_id" ] || continue
     role="organizations/${SELECTED_ORG_ID}/roles/${role_id}"
     MEMBER_OUTPUT=$(gcloud organizations get-iam-policy "$SELECTED_ORG_ID" \
         --flatten="bindings[].members" --filter="bindings.role=$role" \
         --format="value(bindings.members)" | sort -u)
-    mapfile -t MEMBERS < <(printf '%s' "$MEMBER_OUTPUT")
-
-    for member in "${MEMBERS[@]}"; do
-        if [ -n "$member" ]; then
+    while IFS= read -r member; do
+        [ -n "$member" ] || continue
+        if is_our_member "$member"; then
             BINDING_ROLES+=("$role")
             BINDING_MEMBERS+=("$member")
+        else
+            FOREIGN_ROLES["$role_id"]=1
         fi
-    done
+    done <<< "$MEMBER_OUTPUT"
 done
 
-if [ ${#PROJECTS[@]} -eq 0 ] && [ ${#ROLE_IDS[@]} -eq 0 ]; then
+# Project-level bindings (from "Selected projects" access). Dedicated projects are skipped
+# because deleting them removes their policies.
+PBIND_PROJECTS=()
+PBIND_ROLES=()
+PBIND_MEMBERS=()
+if [ ${#CANDIDATE_ROLE_IDS[@]} -gt 0 ] && [ -n "${CANDIDATE_ROLE_IDS[0]}" ]; then
+    ALL_PROJECT_IDS=$(gcloud projects list --filter="lifecycleState=ACTIVE" --format="value(projectId)")
+    while IFS= read -r access_project; do
+        [ -n "$access_project" ] || continue
+        is_dedicated=false
+        for project in "${PROJECTS[@]}"; do
+            [ "${project%%$'\t'*}" = "$access_project" ] && is_dedicated=true
+        done
+        [ "$is_dedicated" = true ] && continue
+        for role_id in "${CANDIDATE_ROLE_IDS[@]}"; do
+            role="organizations/${SELECTED_ORG_ID}/roles/${role_id}"
+            MEMBER_OUTPUT=$(gcloud projects get-iam-policy "$access_project" \
+                --flatten="bindings[].members" --filter="bindings.role=$role" \
+                --format="value(bindings.members)" 2>/dev/null | sort -u || true)
+            while IFS= read -r member; do
+                [ -n "$member" ] || continue
+                if is_our_member "$member"; then
+                    PBIND_PROJECTS+=("$access_project")
+                    PBIND_ROLES+=("$role")
+                    PBIND_MEMBERS+=("$member")
+                else
+                    FOREIGN_ROLES["$role_id"]=1
+                fi
+            done <<< "$MEMBER_OUTPUT"
+        done
+    done <<< "$ALL_PROJECT_IDS"
+fi
+
+# A role is deleted only when nothing but our collector service accounts is bound to it.
+ROLE_IDS=()
+KEPT_ROLE_IDS=()
+for role_id in "${CANDIDATE_ROLE_IDS[@]}"; do
+    [ -n "$role_id" ] || continue
+    if [ -n "${FOREIGN_ROLES[$role_id]}" ]; then
+        KEPT_ROLE_IDS+=("$role_id")
+    else
+        ROLE_IDS+=("$role_id")
+    fi
+done
+
+if [ ${#PROJECTS[@]} -eq 0 ] && [ ${#CANDIDATE_ROLE_IDS[@]} -eq 0 ] && [ -z "$REUSED_PROJECT" ]; then
     echo "No Chronos CSA projects or organization roles were found in '$SELECTED_ORG_NAME' ($SELECTED_ORG_ID)."
     echo "Google Workspace Domain-Wide Delegation is not checked. Remove the collector's client entry manually if it still exists:"
     echo "https://admin.google.com/ac/owl/domainwidedelegation"
@@ -126,6 +226,13 @@ if [ ${#ROLE_IDS[@]} -gt 0 ]; then
     done
 fi
 
+if [ ${#KEPT_ROLE_IDS[@]} -gt 0 ]; then
+    echo "Organization roles KEPT (other principals are bound to them):"
+    for role_id in "${KEPT_ROLE_IDS[@]}"; do
+        echo "  - $role_id"
+    done
+fi
+
 if [ ${#BINDING_MEMBERS[@]} -gt 0 ]; then
     echo "Organization role bindings scheduled for removal:"
     for i in "${!BINDING_MEMBERS[@]}"; do
@@ -133,9 +240,22 @@ if [ ${#BINDING_MEMBERS[@]} -gt 0 ]; then
     done
 fi
 
+if [ ${#PBIND_MEMBERS[@]} -gt 0 ]; then
+    echo "Project role bindings scheduled for removal:"
+    for i in "${!PBIND_MEMBERS[@]}"; do
+        echo "  - ${PBIND_PROJECTS[$i]}: ${PBIND_MEMBERS[$i]} -> ${PBIND_ROLES[$i]}"
+    done
+fi
+
+if [ -n "$REUSED_PROJECT" ]; then
+    echo "Reused project (kept): $REUSED_PROJECT"
+    echo "  - only service account $SA_EMAIL and its keys will be deleted"
+    echo "  - its project policy and enabled APIs are left unchanged"
+fi
+
 echo ""
 echo "The script will remove bindings for these roles, delete the roles, then delete the projects."
-echo "Deleting a project also removes its service account, uploaded certificate key, and project policy override."
+echo "Deleting a dedicated project also removes its service account, uploaded certificate key, and project policy override."
 echo "Google Workspace Domain-Wide Delegation must be removed manually; record the collector's client ID before continuing."
 echo "https://admin.google.com/ac/owl/domainwidedelegation"
 read -r -p "Type 'yes' to permanently start this cleanup: " CLEANUP_CONFIRM
@@ -144,20 +264,29 @@ if [[ "$CLEANUP_CONFIRM" != "yes" ]]; then
     exit 0
 fi
 
-if [ ${#ROLE_IDS[@]} -gt 0 ]; then
-    for i in "${!BINDING_MEMBERS[@]}"; do
-        echo "-> Removing binding: ${BINDING_MEMBERS[$i]} -> ${BINDING_ROLES[$i]}"
-        gcloud organizations remove-iam-policy-binding "$SELECTED_ORG_ID" \
-            --member="${BINDING_MEMBERS[$i]}" --role="${BINDING_ROLES[$i]}" --quiet \
-            >/dev/null
-    done
+for i in "${!BINDING_MEMBERS[@]}"; do
+    echo "-> Removing binding: ${BINDING_MEMBERS[$i]} -> ${BINDING_ROLES[$i]}"
+    gcloud organizations remove-iam-policy-binding "$SELECTED_ORG_ID" \
+        --member="${BINDING_MEMBERS[$i]}" --role="${BINDING_ROLES[$i]}" --quiet \
+        >/dev/null
+done
 
-    for role_id in "${ROLE_IDS[@]}"; do
-        role="organizations/${SELECTED_ORG_ID}/roles/${role_id}"
-        echo "-> Deleting organization role '$role_id'..."
-        gcloud iam roles delete "$role_id" --organization="$SELECTED_ORG_ID" --quiet \
-            >/dev/null
-    done
+for i in "${!PBIND_MEMBERS[@]}"; do
+    echo "-> Removing binding on project '${PBIND_PROJECTS[$i]}': ${PBIND_MEMBERS[$i]} -> ${PBIND_ROLES[$i]}"
+    gcloud projects remove-iam-policy-binding "${PBIND_PROJECTS[$i]}" \
+        --member="${PBIND_MEMBERS[$i]}" --role="${PBIND_ROLES[$i]}" --quiet \
+        >/dev/null
+done
+
+for role_id in "${ROLE_IDS[@]}"; do
+    echo "-> Deleting organization role '$role_id'..."
+    gcloud iam roles delete "$role_id" --organization="$SELECTED_ORG_ID" --quiet \
+        >/dev/null
+done
+
+if [ -n "$REUSED_PROJECT" ]; then
+    echo "-> Deleting service account '$SA_EMAIL' in reused project '$REUSED_PROJECT'..."
+    gcloud iam service-accounts delete "$SA_EMAIL" --project="$REUSED_PROJECT" --quiet >/dev/null
 fi
 
 for project in "${PROJECTS[@]}"; do

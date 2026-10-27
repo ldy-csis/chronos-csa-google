@@ -4,7 +4,7 @@ A deployment toolkit for the Chronos Cloud Security Assessment (CSA) tool that c
 
 ## Overview
 
-`deploy.sh` creates or reuses a dedicated Google Cloud project, enables the required APIs, creates a collector service account, and uploads the CSIS public certificate as a service account key. It creates or updates an organization-level custom audit role and binds it to the service account.
+`deploy.sh` offers to create a dedicated Google Cloud project (recommended) or deploy into an existing project in the selected organization, enables the required APIs, creates a collector service account, and uploads the CSIS public certificate as a service account key. It creates or updates an organization-level custom audit role and binds it to the service account.
 
 Authentication uses the uploaded certificate key, not a workload identity pool or provider. The script does not create a JWT signer role.
 
@@ -30,16 +30,18 @@ The script checks both application-default credentials and the active `gcloud` a
    bash deploy.sh <COLLECTOR_ID>
    ```
 
-2. **Provide the Super Admin email and select your organization** when prompted. Review the deployment summary and type `yes` to create or update resources.
+2. **Provide the Super Admin email and select your organization** when prompted. Then choose **Create a new project (recommended)** or **Select an existing project**. Existing project choices include accessible active projects directly under the organization or in its folders. Review the deployment summary, including the project ID, and type `yes` to create or update resources.
 
 3. **Configure Google Workspace Domain-Wide Delegation** if Workspace collection is wanted:
    - Open [Domain-Wide Delegation](https://admin.google.com/ac/owl/domainwidedelegation).
    - Add a client using the service account client ID and the exact comma-separated OAuth scopes printed by the script.
    - Return to the script and answer `yes` once configured, or `no` to finish without Workspace delegation.
 
+3. **Choose project access** when prompted: **All projects (organization-wide access)** binds the audit role on the organization, as before. **Selected projects** lists the organization's accessible active projects; enter the numbers of the projects to grant, and the role is bound on each of those projects only. Organization-level permissions in the role (for example `resourcemanager.organizations.get`) have no effect on a project-level binding, so organization-wide findings are not collected in this mode.
+
 The script submits the collector ID, project number, organization name, service account email, and uploaded key ID to `https://csa.cs-staging.csis.com/<COLLECTOR_ID>/Google/api/submit/`. The Super Admin email is included only when delegation is confirmed.
 
-After deployment is approved, `.deploy_config` saves `COLLECTOR_ID`, `SUPER_ADMIN_EMAIL`, and `SELECTED_ORG_ID` in the current directory. Later runs load this file, and its values take precedence over environment variables and the collector ID argument. Edit or remove it before deploying for a different collector or organization. Do not commit this local configuration.
+After deployment is approved, `.deploy_config` saves `COLLECTOR_ID`, `SUPER_ADMIN_EMAIL`, `SELECTED_ORG_ID`, `ACCESS_MODE` (`all` or `selected`), and `ACCESS_PROJECT_IDS` (space-separated, for `selected`) in the current directory. Once the project is active, it also saves `PROJECT_ID` so later runs reuse it without prompting for a project again. You can also supply `PROJECT_ID` through the environment. Later runs load this file, and its values take precedence over environment variables and the collector ID argument. Edit or remove it before deploying for a different collector, organization, or project. Do not commit this local configuration.
 
 ## Deployment Safeguards
 
@@ -49,18 +51,18 @@ After the project is available, the script checks project access and waits with 
 
 Before uploading, the script lists the service account keys and looks for the expected key ID configured in `DEPLOY_KEY_ID`. An existing enabled key is reused without changing the upload policy or uploading again. If that key is disabled, deployment stops with an error; unrelated keys do not prevent upload.
 
-The script reuses the first active project it finds with display name `CSIS-CSA-Resources`. This lookup is not scoped to the selected organization, so verify that the deploying account does not have a same-named CSA project in another organization.
+Existing projects, including projects supplied through configuration or the environment, must be active and belong to the selected organization. Their organization ancestry and project access are checked before deployment confirmation. Selecting an existing project changes its enabled APIs and may change its public-key upload policy; a new dedicated project is recommended to isolate these changes.
 
 ## What Gets Created or Updated
 
 | Resource | Configuration |
 |----------|---------------|
-| Project | Display name `CSIS-CSA-Resources`; new project IDs start with `csis-csa-resources-` and have a random suffix |
+| Project | New dedicated project with display name `CSIS-CSA-Resources` and a randomly suffixed `csis-csa-resources-` ID, or the selected existing project |
 | Service account | `csis-csa-collector@<project-id>.iam.gserviceaccount.com` |
 | Project organization-policy override | Disables enforcement of `constraints/iam.disableServiceAccountKeyUpload` to allow public-key upload |
 | Service account key | Public certificate from `deploy-certificate.pem`; an existing matching key is reused |
 | Organization custom role | `csis_collector_role_<project-suffix>`, with the permissions defined in `ROLE_PERMISSIONS` in `deploy.sh` |
-| Organization IAM binding | Grants that custom role to the collector service account |
+| IAM binding | Grants that custom role to the collector service account on the organization (all projects) or on each selected project |
 | Workspace delegation (manual, optional) | Authorizes the service account client ID for the scopes printed from `SCOPES` in `deploy.sh` |
 
 The enabled APIs cover Resource Manager, IAM, IAM Credentials, Logging, Cloud Asset, Service Usage, Essential Contacts, Security Command Center, Storage, Cloud Run, Admin SDK, Cloud Identity, API Keys, and Organization Policy.
@@ -73,9 +75,16 @@ Run from this repository's directory so the script can load the organization sav
 bash cleanup.sh
 ```
 
-The script discovers projects whose IDs begin with `csis-csa-resources-` directly under the selected organization and organization custom roles beginning with `csis_collector_role_`. It lists matching projects, roles, and role bindings, and requires `yes` before removing the bindings, deleting the roles, and scheduling project deletion. Discovery failures stop cleanup before any deletions.
+Cleanup only touches resources it can prove were created by `deploy.sh`:
 
-**Cleanup covers all matching deployments in the selected organization**, not just the saved collector ID. Projects moved under folders or reused projects with a different ID prefix are not discovered; inspect and remove those separately if applicable.
+- **Projects** are scheduled for deletion only if the ID starts with `csis-csa-resources-`, the name is `CSIS-CSA-Resources`, the project belongs to the selected organization, and it contains the `csis-csa-collector` service account carrying the CSIS certificate key.
+- **Roles** are deleted only if the ID starts with `csis_collector_role_` and the title is `CSIS Collector role`, and no principal other than our collector service accounts is bound to it. A role with other principals bound is kept.
+- **Bindings** are removed only for `csis-csa-collector` service accounts in the projects identified above, on the organization and on accessible projects ("Selected projects" access).
+- **A reused project** (named by `PROJECT_ID` in `.deploy_config`) is never deleted; only its `csis-csa-collector` service account is deleted, and only if it carries the CSIS certificate key. Its project policy and enabled APIs are left unchanged, including the key-upload override.
+
+It lists everything and requires `yes` before making changes. Discovery failures stop cleanup before any deletions.
+
+**Cleanup covers all matching deployments in the selected organization**, not just the saved collector ID. Without `.deploy_config`, a reused project's `csis-csa-collector` service account must be removed manually.
 
 Project deletion also removes the collector service account, its uploaded certificate key, enabled API configuration, and project policy override. Google Cloud may allow project recovery only during its retention period. The local `.deploy_config` is removed after successful cleanup; `deploy-certificate.pem` is retained.
 
