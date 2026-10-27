@@ -147,7 +147,7 @@ for role_id in "${CANDIDATE_ROLE_IDS[@]}"; do
     role="organizations/${SELECTED_ORG_ID}/roles/${role_id}"
     MEMBER_OUTPUT=$(gcloud organizations get-iam-policy "$SELECTED_ORG_ID" \
         --flatten="bindings[].members" --filter="bindings.role=$role" \
-        --format="value(bindings.members)" | sort -u)
+        --format="value(bindings.members,bindings.condition.title)" | awk -F'	' '$2 == "" { print $1 }' | sort -u)
     while IFS= read -r member; do
         [ -n "$member" ] || continue
         if is_our_member "$member"; then
@@ -177,7 +177,7 @@ if [ ${#CANDIDATE_ROLE_IDS[@]} -gt 0 ] && [ -n "${CANDIDATE_ROLE_IDS[0]}" ]; the
             role="organizations/${SELECTED_ORG_ID}/roles/${role_id}"
             MEMBER_OUTPUT=$(gcloud projects get-iam-policy "$access_project" \
                 --flatten="bindings[].members" --filter="bindings.role=$role" \
-                --format="value(bindings.members)" 2>/dev/null | sort -u || true)
+                --format="value(bindings.members,bindings.condition.title)" 2>/dev/null | awk -F'	' '$2 == "" { print $1 }' | sort -u || true)
             while IFS= read -r member; do
                 [ -n "$member" ] || continue
                 if is_our_member "$member"; then
@@ -272,14 +272,14 @@ fi
 for i in "${!BINDING_MEMBERS[@]}"; do
     echo "-> Removing binding: ${BINDING_MEMBERS[$i]} -> ${BINDING_ROLES[$i]}"
     gcloud organizations remove-iam-policy-binding "$SELECTED_ORG_ID" \
-        --member="${BINDING_MEMBERS[$i]}" --role="${BINDING_ROLES[$i]}" --quiet \
+        --member="${BINDING_MEMBERS[$i]}" --role="${BINDING_ROLES[$i]}" --condition=None --quiet \
         >/dev/null
 done
 
 for i in "${!PBIND_MEMBERS[@]}"; do
     echo "-> Removing binding on project '${PBIND_PROJECTS[$i]}': ${PBIND_MEMBERS[$i]} -> ${PBIND_ROLES[$i]}"
     gcloud projects remove-iam-policy-binding "${PBIND_PROJECTS[$i]}" \
-        --member="${PBIND_MEMBERS[$i]}" --role="${PBIND_ROLES[$i]}" --quiet \
+        --member="${PBIND_MEMBERS[$i]}" --role="${PBIND_ROLES[$i]}" --condition=None --quiet \
         >/dev/null
 done
 

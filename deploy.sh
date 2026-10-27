@@ -331,7 +331,7 @@ if [ -z "$ACCESS_MODE" ]; then
     echo " Project Access"
     echo "===================================================="
     echo "Choose which projects the collector service account is granted access to."
-    select access_option in "All projects (organization-wide access)" "Selected projects"; do
+    select access_option in "All projects (organization-wide access and full analysis)" "Selected projects"; do
         case "$REPLY" in
             1)
                 ACCESS_MODE="all"
@@ -594,6 +594,7 @@ if [ "$ACCESS_MODE" = "all" ]; then
     gcloud organizations add-iam-policy-binding "$SELECTED_ORG_ID" \
         --member="serviceAccount:${SA_EMAIL}" \
         --role="organizations/${SELECTED_ORG_ID}/roles/${ROLE_ID}" \
+        --condition=None \
         >/dev/null
     echo "-> Role bound to service account on organization '$SELECTED_ORG_ID'."
 else
@@ -601,6 +602,7 @@ else
         gcloud projects add-iam-policy-binding "$access_project" \
             --member="serviceAccount:${SA_EMAIL}" \
             --role="organizations/${SELECTED_ORG_ID}/roles/${ROLE_ID}" \
+            --condition=None \
             >/dev/null
         echo "-> Role bound to service account on project '$access_project'."
     done
